@@ -9,3 +9,6 @@
 *.patch
 *.gdb
 **/objects/
+.venv/
+__pycache__/
+*.egg-info/

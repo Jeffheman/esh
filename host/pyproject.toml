@@ -1,0 +1,23 @@
+# Copyright 2026 esh contributors
+# SPDX-License-Identifier: Apache-2.0
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "esh-mcp"
+version = "0.1.0"
+description = "Read-only MCP host for esh register diagnostics"
+requires-python = ">=3.10"
+license = {text = "Apache-2.0"}
+dependencies = ["mcp>=1.12,<2", "pyserial>=3.5,<4"]
+
+[project.scripts]
+esh-mcp = "esh_mcp.server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+esh_mcp = ["data/*.json"]

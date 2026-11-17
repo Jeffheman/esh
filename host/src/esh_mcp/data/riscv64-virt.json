@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "board": "riscv64-virt",
+  "registers": {
+    "uart0.lcr": {
+      "address": "0x10000003",
+      "width_bits": 8,
+      "access": "read_only",
+      "read_side_effects": false,
+      "description": "QEMU virt 16550 UART line control register. Reading LCR does not acknowledge interrupts or consume receive data. LSR is intentionally excluded because reading it can clear error indications.",
+      "fields": {
+        "word_length": {"lsb": 0, "width": 2, "description": "Character length is this value plus five bits."},
+        "extra_stop_bit": {"lsb": 2, "width": 1, "description": "Additional stop interval enabled."},
+        "parity_enabled": {"lsb": 3, "width": 1, "description": "Parity generation and checking enabled."},
+        "even_parity": {"lsb": 4, "width": 1, "description": "Even parity selected when parity is enabled."},
+        "stick_parity": {"lsb": 5, "width": 1, "description": "Stick parity selected when parity is enabled."},
+        "break_enabled": {"lsb": 6, "width": 1, "description": "Transmit break enabled."},
+        "divisor_latch_access": {"lsb": 7, "width": 1, "description": "DLAB: offsets zero and one select divisor latches instead of normal data and interrupt-enable registers."}
+      }
+    }
+  },
+  "tests": {
+    "uart.normal_access": {
+      "register": "uart0.lcr",
+      "mask": "0x80",
+      "expected": "0x00",
+      "description": "PASS means DLAB is clear and UART offsets zero and one select normal registers. This does not establish transmit readiness or general device health. Reads LCR once, without writes or polling."
+    }
+  }
+}

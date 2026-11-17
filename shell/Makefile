@@ -19,7 +19,7 @@ MAKEFLAGS += --no-builtin-rules
 MAKEFLAGS += --jobs=$(shell nproc)
 
 # Save the object files in this directory
-BUILD_PATH = objects
+BUILD_PATH ?= objects
 
 # SHELL_ROOT is to be set my the user in their makefile and should point
 # to the directory that current Makefile resides in (i.e shell/).
@@ -159,7 +159,7 @@ $(BUILD_PATH):
 .PHONY: clean
 ### clean: Cleans the project
 clean::
-	@rm -rf $(OBJS) *.elf *.bin *.lst *.map *.gdb $(BUILD_PATH)
+	@rm -rf $(OBJS) $(PROJECT).elf $(PROJECT).bin $(PROJECT).elf.lst $(PROJECT).elf.map $(PROJECT).gdb $(BUILD_PATH)
 
 # helpful config and help targets
 -include $(SHELL_ROOT)/build-magic/configuration.mk

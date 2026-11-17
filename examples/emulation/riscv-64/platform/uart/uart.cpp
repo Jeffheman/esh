@@ -17,9 +17,9 @@
 #include <stdint.h>
 #include "uart.hpp"
 
-#define UART_THR *((unsigned char *)(UART_BASE + 0x00))
-#define UART_RBR *((unsigned char *)(UART_BASE + 0x00))
-#define UART_LSR *((unsigned char *)(UART_BASE + 0x05))
+#define UART_THR *((volatile unsigned char *)(UART_BASE + 0x00))
+#define UART_RBR *((volatile unsigned char *)(UART_BASE + 0x00))
+#define UART_LSR *((volatile unsigned char *)(UART_BASE + 0x05))
 
 #define TX_BUFF_FULL (!(UART_LSR & (1 << 5)))
 #define NO_DATA (-1)

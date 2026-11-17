@@ -74,6 +74,99 @@ make gdb
 
 You should see similar output as in above visual.
 
+## Agent / MCP MVP (RISC-V QEMU)
+
+The Linux host MCP server exposes a read-only interface to the RISC-V QEMU
+example. MCP runs over stdio on the host; the firmware uses a bounded ASCII
+protocol over UART. The default interactive shell remains available.
+
+### Build and run
+
+Install Python 3.10+, Python venv support, `gcc-riscv64-linux-gnu`,
+`g++-riscv64-linux-gnu`, `binutils-riscv64-linux-gnu`, and `qemu-system-misc`.
+From the repository root:
+
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install -e ./host
+make -C examples/emulation/riscv-64 MODE=rpc
+make -C examples/emulation/riscv-64 MODE=rpc run
+```
+
+QEMU prints a PTY path such as `/dev/pts/3`. Configure an MCP client to launch
+`.venv/bin/esh-mcp --port /dev/pts/3` using absolute paths to the executable and
+port. Alternatively, launch that command from a second terminal to serve MCP
+stdio; it is not an interactive terminal UI. The PTY path changes between runs.
+Only one server should own a port, and no terminal emulator should share it.
+Linux PTYs use a per-user lock file between MCP servers because WSL1 does not
+support locking the PTY itself; physical Linux serial ports use pyserial's
+exclusive lock. Neither prevents non-cooperating programs from interfering.
+
+Call `get_device_info` first to establish compatibility, then use:
+
+- `read_register(register="uart0.lcr")`
+- `read_register_fields(register="uart0.lcr")`
+- `run_named_test(test="uart.normal_access")`
+
+Resources `esh://board/registers` and `esh://board/tests` describe the available
+registers and diagnostics. The diagnostic checks only that DLAB is clear; PASS
+is not a claim of transmit readiness or general device health. LSR is deliberately
+not exposed, since reading it can clear UART error indications. MMIO writes,
+raw addresses, arbitrary shell commands, reset and flashing are not supported.
+This MVP covers QEMU only, not physical-board or external I2C/SPI access.
+
+The versioned descriptor in `host/src/esh_mcp/data/riscv64-virt.json` is packaged
+with the server and generates the firmware allowlist during the RPC build. The
+handshake compares a SHA-256 digest of the complete canonical descriptor, not
+just a manually maintained version string. Restart the server and rebuild the
+firmware after changing that descriptor.
+
+### Wire protocol
+
+Each ASCII frame ends with one LF and is at most 256 bytes including LF. Fields
+are separated by single spaces. IDs are 16 lowercase hexadecimal characters.
+CRLF, control bytes, overlong frames and invalid IDs are discarded; no partial
+or truncated request is executed. A subsequent LF restores the frame boundary.
+
+```text
+@ESH1 0000000000000001 HELLO
+@ESH1 0000000000000001 OK HELLO board=riscv64-virt fw=<revision> map=<digest> ops=READ,TEST
+@ESH1 0000000000000002 READ uart0.lcr
+@ESH1 0000000000000002 OK READ reg=uart0.lcr width=8 value=0x00
+@ESH1 0000000000000003 TEST uart.normal_access
+@ESH1 0000000000000003 OK TEST test=uart.normal_access result=PASS reg=uart0.lcr width=8 value=0x00
+@ESH1 0000000000000004 READ uart0.lsr
+@ESH1 0000000000000004 ERR UNKNOWN_REGISTER
+```
+
+Values above are illustrative. `OK` means the operation executed; test results
+can still be `FAIL`. Errors include `BAD_REQUEST`, `UNSUPPORTED_OP`,
+`UNKNOWN_REGISTER` and `UNKNOWN_TEST`. The server validates response IDs,
+operations, fields and value widths and serializes requests. It does not retry
+operations automatically. After a timeout, malformed response or I/O failure,
+call `get_device_info` again before further reads; a timeout means the result
+is unknown, not that execution did not happen. There is no wire checksum or
+authentication: use only a trusted local lab connection. Host receive timestamps
+are not hardware sampling timestamps.
+
+### Tests and interactive-shell regression
+
+```sh
+.venv/bin/python -m unittest discover -s host/tests -v
+.venv/bin/python tests/test_manifest.py
+make -C examples/emulation/riscv-64 MODE=shell
+.venv/bin/python tests/test_qemu_mcp.py
+```
+
+The integration suite starts and stops its own QEMU processes, exercises raw
+protocol error recovery, connects a real MCP stdio client through the server
+and serial PTY, and checks the original shell. Both firmware variants must be
+built first. `clean` affects the selected mode only; use `MODE=rpc clean` for
+RPC objects. Use `make -B` when changing compiler options such as `OPTIMIZATION`.
+Set `ESH_QEMU` to an alternate QEMU executable if needed. Run the
+original terminal interface with `make -C examples/emulation/riscv-64 MODE=shell run`;
+use Ctrl+A, X to exit that interface or Ctrl+C to stop the RPC QEMU process.
+
 # Documentation
 
 - To be able to run all the example and create your own project follow the documentation in [docs/](docs/index.md#table-of-contents).
