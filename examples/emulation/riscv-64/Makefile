@@ -20,22 +20,9 @@ STARTUP            = riscv64
 RAM_BASE_PHYSICAL  = 0x80000000
 RAM_SIZE           = 0x4000000
 
-MODE ?= shell
 QEMU ?= qemu-system-riscv64
+QEMU_CONSOLE ?= -nographic
 PYTHON ?= python3
-
-ifeq ($(MODE),rpc)
-PROJECT = shell-rpc
-BUILD_PATH = objects/rpc
-ASM_FLAGS += -DENTRY_POINT=rpc_prompt
-QEMU_CONSOLE = -display none -monitor none -serial pty
-else ifeq ($(MODE),shell)
-BUILD_PATH = objects/shell
-IGNORE_SRC_PATH += platform/rpc
-QEMU_CONSOLE = -nographic
-else
-$(error MODE must be shell or rpc)
-endif
 
 # MANDATORY:
 #     Provide relative path to shell/ from current directory
@@ -47,16 +34,15 @@ SHELL_ROOT=../../../shell
 GCC_FLAGS += -mcmodel=medany -fno-pie -fno-pic -msmall-data-limit=0
 ASM_FLAGS += -fno-pie -fno-pic
 
-ifeq ($(MODE),rpc)
 RPC_MANIFEST = ../../../host/src/esh_mcp/data/riscv64-virt.json
 RPC_GENERATOR = ../../../tools/generate_rpc_board.py
-INCLUDES += -I$(BUILD_PATH)
+# Prefer the current manifest header over headers left in old build directories.
+INCLUDES := -I$(BUILD_PATH) $(INCLUDES)
 
 $(BUILD_PATH)/rpc_board.h: $(RPC_MANIFEST) $(RPC_GENERATOR) | $(BUILD_PATH)
 	$(PYTHON) $(RPC_GENERATOR) $(RPC_MANIFEST) $@
 
 $(OBJS): $(BUILD_PATH)/rpc_board.h
-endif
 
 # ------------------------ User targets below this line ------------------------
 ### run: Launches QEMU and loads the project binary on it

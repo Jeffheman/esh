@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Official FastMCP stdio entry point for the fixed esh board manifest."""
+"""Official FastMCP stdio entry point for manifest-bound esh operations."""
 
 import argparse
 import asyncio
@@ -20,7 +20,9 @@ from contextlib import asynccontextmanager
 import json
 import logging
 import sys
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
+
+from pydantic import Field
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
@@ -43,12 +45,18 @@ def create_server(client: DeviceClient) -> FastMCP:
     server = FastMCP(
         "esh-mcp",
         instructions=(
-            "Call get_device_info explicitly before READ or TEST and after any session error. "
-            "Only uart0.lcr is exposed; reading LSR can clear error flags and is not allowed. "
+            "Call get_device_info explicitly before device operations and after any session error. "
+            "Only uart0.lcr and uart0.scr can be read; reading LSR can clear error flags and is forbidden. "
+            "Only uart0.scr can be written. First prepare_register_write, display its exact preview, "
+            "and obtain explicit user approval before execute_register_write with the returned token. "
+            "Tokens bind one expiring operation, not human identity or authorization; keep client approvals enabled. "
+            "Successful preparation replaces any previous token; re-handshake also invalidates it. "
+            "Execution compares the current byte with the preview before writing and reports actual readback. "
+            "PRECONDITION_FAILED means no write; VERIFY_FAILED means a write was attempted. Neither is success. "
+            "Do not automatically retry or roll back writes, including after cancellation or timeout. "
+            "A timeout means the outcome is unknown; re-handshake and read to inspect current state. "
             "uart.normal_access only checks DLAB=0, not transmit readiness or device health. "
-            "Read-only operations are idempotent in effects, but observed values may change. "
-            "observed_at is host UTC after receipt, not a device sampling timestamp. "
-            "A timeout means the operation outcome is unknown; do not automatically retry."
+            "Read-only observations may change. observed_at is host UTC after receipt, not device sampling time."
         ),
         lifespan=lifespan,
         log_level="WARNING",
@@ -83,19 +91,38 @@ def create_server(client: DeviceClient) -> FastMCP:
         return await invoke(client.get_device_info)
 
     @server.tool(annotations=annotations)
-    async def read_register(register: Literal["uart0.lcr"]) -> dict[str, Any]:
-        """Read LCR once without writes; return hex value, integer width and host UTC."""
+    async def read_register(register: Literal["uart0.lcr", "uart0.scr"]) -> dict[str, Any]:
+        """Read one allowlisted register; return hex value, integer width and host UTC."""
         return await invoke(client.read_register, register)
 
     @server.tool(annotations=annotations)
-    async def read_register_fields(register: Literal["uart0.lcr"]) -> dict[str, Any]:
-        """Read LCR once and decode all fields from that same read, with hex values."""
+    async def read_register_fields(register: Literal["uart0.lcr", "uart0.scr"]) -> dict[str, Any]:
+        """Read once and decode all register fields from that same sample."""
         return await invoke(client.read_register_fields, register)
 
     @server.tool(annotations=annotations)
     async def run_named_test(test: Literal["uart.normal_access"]) -> dict[str, Any]:
         """Check DLAB=0 once, not TX health. Successful execution may yield result FAIL."""
         return await invoke(client.run_named_test, test)
+
+    @server.tool(annotations=ToolAnnotations(
+        readOnlyHint=True, destructiveHint=False, idempotentHint=False, openWorldHint=False,
+    ))
+    async def prepare_register_write(
+        register: Literal["uart0.scr"],
+        value: Annotated[int, Field(strict=True, ge=0, le=255)],
+    ) -> dict[str, Any]:
+        """Read SCR and prepare a 60-second one-use preview; show it and obtain approval before execution."""
+        return await invoke(client.prepare_register_write, register, value)
+
+    @server.tool(annotations=ToolAnnotations(
+        readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False,
+    ))
+    async def execute_register_write(
+        confirmation_token: Annotated[str, Field(strict=True, pattern=r"^[0-9a-f]{32}$")],
+    ) -> dict[str, Any]:
+        """After explicit approval, consume the preview token and conditionally write SCR once; never retry automatically."""
+        return await invoke(client.execute_register_write, confirmation_token)
 
     @server.resource("esh://board/registers", mime_type="application/json")
     def board_registers() -> str:
@@ -117,7 +144,7 @@ def create_server(client: DeviceClient) -> FastMCP:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Read-only esh MCP server (stdio)")
+    parser = argparse.ArgumentParser(description="esh MCP server with allowlisted reads and confirmed writes (stdio)")
     parser.add_argument("--port", required=True, help="absolute local serial device path or COM port; no URLs")
     parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument("--timeout", type=float, default=1.0, help="total operation deadline in seconds")

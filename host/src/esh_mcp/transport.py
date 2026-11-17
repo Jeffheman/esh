@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Bounded, single-flight transport for the ASCII ESH1 protocol."""
+"""Bounded Shell commands with single-flight ESH1 responses."""
 
 from contextlib import contextmanager
 import hashlib
@@ -27,11 +27,18 @@ import time
 import uuid
 
 MAX_FRAME_BYTES = 256
+SHELL_LINE_BUFFER_SIZE = 32
+SHELL_MAX_ARG_COUNT = 16
+SHELL_OPERATIONS = {"HELLO": "h", "READ": "r lcr", "TEST": "t normal", "WRITE": "w s"}
 ERROR_CODES = {
     "BAD_REQUEST", "UNSUPPORTED_OP", "UNKNOWN_REGISTER", "UNKNOWN_TEST",
     "ACCESS_DENIED",
 }
-REQUEST_ARGUMENTS = {"HELLO": None, "READ": "uart0.lcr", "TEST": "uart.normal_access"}
+REQUEST_ARGUMENTS = {
+    "HELLO": (None,), "READ": ("uart0.lcr", "uart0.scr"),
+    "TEST": ("uart.normal_access",), "WRITE": ("uart0.scr",),
+}
+_UNSET = object()
 
 
 class EshError(Exception):
@@ -81,6 +88,17 @@ def parse_response(frame: bytes) -> tuple[str, str, dict[str, str]]:
             raise ProtocolError("invalid or duplicate response field")
         fields[key] = value
     return request_id, operation, fields
+
+
+def encode_command(command: str) -> bytes:
+    if any(not 32 <= ord(char) <= 126 for char in command):
+        raise EshError("INVALID_ARGUMENT", "Shell command must contain printable ASCII only")
+    if len(command) >= SHELL_LINE_BUFFER_SIZE:
+        raise EshError("INVALID_ARGUMENT", f"Shell command has {len(command)} bytes; maximum is {SHELL_LINE_BUFFER_SIZE - 1}")
+    argument_count = len(command.split())
+    if not 1 <= argument_count <= SHELL_MAX_ARG_COUNT:
+        raise EshError("INVALID_ARGUMENT", f"Shell command has {argument_count} arguments; expected 1..{SHELL_MAX_ARG_COUNT}")
+    return command.encode("ascii") + b"\n"
 
 
 class SerialTransport:
@@ -178,8 +196,8 @@ class SerialTransport:
     def prepare_handshake(self, deadline: float):
         self._ensure_open(deadline)
         if self._resync_required:
-            # Terminate an old partial request before sending another HELLO.
-            self._write(b"\n", deadline)
+            # Cancel unfinished Shell input without executing it.
+            self._write(b"\x03", deadline)
         self._serial.reset_input_buffer()
         self._remaining(deadline)
         self._resync_required = False
@@ -206,15 +224,32 @@ class SerialTransport:
                 return bytes(frame)
         raise ProtocolError("response exceeds 256 bytes including LF")
 
-    def exchange(self, operation: str, argument: str | None, deadline: float) -> dict[str, str]:
-        if operation not in REQUEST_ARGUMENTS or argument != REQUEST_ARGUMENTS[operation]:
+    def exchange(self, operation: str, argument: str | None, deadline: float,
+                 *, expected=_UNSET, value=_UNSET) -> dict[str, str]:
+        if (not isinstance(operation, str) or operation not in REQUEST_ARGUMENTS
+                or (argument is not None and not isinstance(argument, str))
+                or argument not in REQUEST_ARGUMENTS[operation]):
             raise EshError("INVALID_ARGUMENT", "operation or name is not allowlisted")
+        suffix = SHELL_OPERATIONS[operation]
+        if operation == "WRITE":
+            if any(type(item) is not int or not 0 <= item <= 255 for item in (expected, value)):
+                raise EshError("INVALID_ARGUMENT", "WRITE requires integer expected and value in 0..255")
+            suffix += f" {expected:02x} {value:02x}"
+        else:
+            if expected is not _UNSET or value is not _UNSET:
+                raise EshError("INVALID_ARGUMENT", "only WRITE accepts expected and value")
+            if operation == "READ" and argument == "uart0.scr":
+                suffix = "r s"
         request_id = uuid.uuid4().hex[:16]
-        suffix = f" {argument}" if argument is not None else ""
-        frame = f"@ESH1 {request_id} {operation}{suffix}\n".encode("ascii")
+        frame = encode_command(f"mcp {request_id} {suffix}")
         self._write(frame, deadline)
         while True:
-            response_id, response_op, fields = parse_response(self._read_frame(deadline))
+            response = self._read_frame(deadline)
+            if not response.startswith(b"@ESH1"):
+                if any(not 32 <= byte <= 126 for byte in response[:-1]):
+                    raise ProtocolError("non-printable Shell output")
+                continue
+            response_id, response_op, fields = parse_response(response)
             if response_id != request_id:
                 continue
             if response_op == "ERR":

@@ -14,15 +14,11 @@
 # limitations under the License.
 #
 
-#ifndef ENTRY_POINT
-#define ENTRY_POINT prompt
-#endif
-
 # Execution starts from here
 .section .init
 .globl _start
 _start:
     la sp, _STACK_TOP_  # Load the SP with end of RAM
     andi sp, sp, -16
-    jal ENTRY_POINT
+    jal prompt
     j .                 # Spin forever

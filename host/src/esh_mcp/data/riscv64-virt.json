@@ -1,8 +1,9 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "board": "riscv64-virt",
   "registers": {
     "uart0.lcr": {
+      "alias": "lcr",
       "address": "0x10000003",
       "width_bits": 8,
       "access": "read_only",
@@ -17,10 +18,27 @@
         "break_enabled": {"lsb": 6, "width": 1, "description": "Transmit break enabled."},
         "divisor_latch_access": {"lsb": 7, "width": 1, "description": "DLAB: offsets zero and one select divisor latches instead of normal data and interrupt-enable registers."}
       }
+    },
+    "uart0.scr": {
+      "alias": "s",
+      "address": "0x10000007",
+      "width_bits": 8,
+      "access": "read_write",
+      "read_side_effects": false,
+      "description": "QEMU 6.2 virt 16550 UART scratch register, at offset seven with serial_mm regshift=0. In the verified QEMU v6.2.0 source, serial_ioport_write case 7 only stores s->scr = val and serial_ioport_read case 7 returns s->scr. This stored-byte policy is specific to the emulated device; it does not establish safety on unverified real hardware. Source: https://gitlab.com/qemu-project/qemu/-/raw/v6.2.0/hw/char/serial.c",
+      "fields": {
+        "scratch": {"lsb": 0, "width": 8, "description": "Stored scratch byte."}
+      },
+      "write_policy": {
+        "mask": "0xff",
+        "effect": "stored_value_only",
+        "requires_expected": true
+      }
     }
   },
   "tests": {
     "uart.normal_access": {
+      "alias": "normal",
       "register": "uart0.lcr",
       "mask": "0x80",
       "expected": "0x00",

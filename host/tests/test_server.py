@@ -37,31 +37,44 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         self.client = Mock(spec=DeviceClient)
         self.server = create_server(self.client)
 
-    async def test_four_tools_have_read_only_annotations_and_exact_name_schema(self):
+    async def test_six_tools_distinguish_reads_preparation_and_execution(self):
         tools = {tool.name: tool for tool in await self.server.list_tools()}
-        self.assertEqual(set(tools), {"get_device_info", "read_register", "read_register_fields", "run_named_test"})
+        self.assertEqual(set(tools), {
+            "get_device_info", "read_register", "read_register_fields", "run_named_test",
+            "prepare_register_write", "execute_register_write",
+        })
         for name, tool in tools.items():
-            self.assertTrue(tool.annotations.readOnlyHint)
-            self.assertFalse(tool.annotations.destructiveHint)
-            self.assertTrue(tool.annotations.idempotentHint)
+            self.assertEqual(tool.annotations.readOnlyHint, name != "execute_register_write")
+            self.assertEqual(tool.annotations.destructiveHint, name == "execute_register_write")
+            self.assertEqual(tool.annotations.idempotentHint, not name.endswith("register_write"))
             self.assertFalse(tool.annotations.openWorldHint)
-            if name != "get_device_info":
-                parameter = "test" if name == "run_named_test" else "register"
-                schema = tool.inputSchema["properties"][parameter]
-                expected = "uart.normal_access" if name == "run_named_test" else "uart0.lcr"
-                self.assertTrue(schema.get("const") == expected or schema.get("enum") == [expected])
+        for name in ("read_register", "read_register_fields"):
+            schema = tools[name].inputSchema["properties"]["register"]
+            self.assertEqual(set(schema["enum"]), {"uart0.lcr", "uart0.scr"})
+        test_schema = tools["run_named_test"].inputSchema["properties"]["test"]
+        self.assertEqual(test_schema["const"], "uart.normal_access")
+        preparation = tools["prepare_register_write"].inputSchema["properties"]
+        self.assertEqual(preparation["register"]["const"], "uart0.scr")
+        self.assertEqual(preparation["value"]["type"], "integer")
+        self.assertEqual(preparation["value"]["minimum"], 0)
+        self.assertEqual(preparation["value"]["maximum"], 255)
+        execution = tools["execute_register_write"].inputSchema["properties"]
+        self.assertEqual(set(execution), {"confirmation_token"})
+        self.assertEqual(execution["confirmation_token"]["pattern"], "^[0-9a-f]{32}$")
+        self.assertIn("explicit user approval", self.server.instructions)
+        self.assertIn("not human identity or authorization", self.server.instructions)
 
     async def test_fixed_resources_need_no_serial_and_match_manifest(self):
         resources = await self.server.list_resources()
         self.assertEqual({str(resource.uri) for resource in resources}, {"esh://board/registers", "esh://board/tests"})
-        for uri, key, name in (("esh://board/registers", "registers", "uart0.lcr"),
-                               ("esh://board/tests", "tests", "uart.normal_access")):
+        for uri, key, names in (("esh://board/registers", "registers", {"uart0.lcr", "uart0.scr"}),
+                                ("esh://board/tests", "tests", {"uart.normal_access"})):
             contents = list(await self.server.read_resource(uri))
             self.assertEqual(len(contents), 1)
             payload = json.loads(contents[0].content)
             self.assertEqual(payload["board"], "riscv64-virt")
             self.assertEqual(payload["manifest_digest"], MANIFEST_DIGEST)
-            self.assertEqual(set(payload[key]), {name})
+            self.assertEqual(set(payload[key]), names)
         self.assertEqual(self.client.mock_calls, [])
 
     async def test_sync_operations_run_off_event_loop(self):
@@ -70,6 +83,8 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
             ("get_device_info", {}), ("read_register", {"register": "uart0.lcr"}),
             ("read_register_fields", {"register": "uart0.lcr"}),
             ("run_named_test", {"test": "uart.normal_access"}),
+            ("prepare_register_write", {"register": "uart0.scr", "value": 165}),
+            ("execute_register_write", {"confirmation_token": "a" * 32}),
         ):
             seen = []
             def operation(*args):
@@ -81,6 +96,48 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(seen), 1)
             self.assertNotEqual(seen[0], loop_thread)
             method.assert_called_once_with(*arguments.values())
+
+    async def test_write_input_schema_rejects_coercion_and_nonallowlisted_targets(self):
+        for arguments in (
+            {"register": "uart0.lcr", "value": 0},
+            {"register": "0x10000007", "value": 0},
+            *[{"register": "uart0.scr", "value": value} for value in
+              (-1, 256, True, False, 1.5, "165", "0xa5", None)],
+        ):
+            with self.subTest(arguments=arguments), self.assertRaises(ToolError):
+                await self.server.call_tool("prepare_register_write", arguments)
+        for token in ("", "a" * 31, "A" * 32, "a" * 32 + "\n", 123, None):
+            with self.subTest(token=token), self.assertRaises(ToolError):
+                await self.server.call_tool("execute_register_write", {"confirmation_token": token})
+        self.client.prepare_register_write.assert_not_called()
+        self.client.execute_register_write.assert_not_called()
+
+    async def test_write_cancellation_does_not_retry_or_cancel_worker(self):
+        loop = asyncio.get_running_loop()
+        entered = asyncio.Event()
+        release = threading.Event()
+        completed = asyncio.Event()
+
+        def execute(token):
+            loop.call_soon_threadsafe(entered.set)
+            release.wait(3)
+            loop.call_soon_threadsafe(completed.set)
+            return {"result": "WRITTEN"}
+
+        self.client.execute_register_write.side_effect = execute
+        request = asyncio.create_task(self.server.call_tool(
+            "execute_register_write", {"confirmation_token": "a" * 32},
+        ))
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+            request.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await request
+        finally:
+            release.set()
+            await asyncio.gather(request, return_exceptions=True)
+        await asyncio.wait_for(completed.wait(), 2)
+        self.client.execute_register_write.assert_called_once_with("a" * 32)
 
     async def test_timeout_is_tool_error_not_success(self):
         self.client.read_register.side_effect = EshError("TIMEOUT", "deadline expired", outcome_unknown=True)
@@ -146,7 +203,7 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
                 async with stdio_client(params, errlog=error_log) as (reader, writer):
                     async with ClientSession(reader, writer) as session:
                         await session.initialize()
-                        self.assertEqual(len((await session.list_tools()).tools), 4)
+                        self.assertEqual(len((await session.list_tools()).tools), 6)
                         self.assertEqual(len((await session.list_resources()).resources), 2)
                         resources = await session.read_resource("esh://board/registers")
                         self.assertEqual(json.loads(resources.contents[0].text)["manifest_digest"], MANIFEST_DIGEST)

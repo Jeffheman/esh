@@ -122,14 +122,17 @@ OBJS += $(patsubst %.S,$(BUILD_PATH)/%.o,$(STARTUP_FILE))
 DEP_HEADERS = $(H_FILES) $(HPP_FILES)
 
 $(BUILD_PATH)/%.o:%.c $(DEP_HEADERS)
+	@mkdir -p $(@D)
 	@echo "compiling" $< $(PRINT_ONLY_ERRORS)
 	@$(GCC) $(GCC_FLAGS) $< -o $@
 
 $(BUILD_PATH)/%.o:%.cpp $(DEP_HEADERS)
+	@mkdir -p $(@D)
 	@echo "compiling" $< $(PRINT_ONLY_ERRORS)
 	@$(GPP) $(GCC_FLAGS) -Wwrite-strings $< -o $@
 
 $(BUILD_PATH)/%.o:%.S $(DEP_HEADERS)
+	@mkdir -p $(@D)
 	@echo "assembling" $< $(PRINT_ONLY_ERRORS)
 	@$(AS) -c $(ASM_FLAGS)  $< -o $@
 

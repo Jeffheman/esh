@@ -160,7 +160,7 @@ static int prefix_match(char *sub, int len, const char *str) {
   return TRUE;
 }
 static void handle_tab(char *cmd_buff, int *char_count) {
-  if (cmd_buff == NULL || char_count <= 0) {
+  if (cmd_buff == NULL || char_count == NULL || *char_count <= 0) {
     return;
   }
 
@@ -181,8 +181,12 @@ static void handle_tab(char *cmd_buff, int *char_count) {
 
   // if only one match, then that's the command to be executed
   if (match_count == 1) {
-    memcpy(cmd_buff, table[last_match].command_name, LINE_BUFF_SIZE);
-    *char_count = strlen(cmd_buff);
+    int length = strlen(table[last_match].command_name);
+    if (length < LINE_BUFF_SIZE) {
+      memcpy(cmd_buff, table[last_match].command_name, length);
+      cmd_buff[length] = END_OF_LINE;
+      *char_count = length;
+    }
   }
 
   // print current line with old/updated command
@@ -203,8 +207,10 @@ static int parse_line(char **argv, char *line_buff, int argument_size) {
 
   while (pos <= length) {
     if (line_buff[pos] != '\t' && line_buff[pos] != SPACE &&
-        line_buff[pos] != END_OF_LINE)
+        line_buff[pos] != END_OF_LINE) {
+      if (argc >= argument_size) return -1;
       argv[argc++] = &line_buff[pos];
+    }
 
     for (; line_buff[pos] != '\t' && line_buff[pos] != SPACE &&
            line_buff[pos] != END_OF_LINE;
@@ -242,6 +248,7 @@ static void shell(void) {
   int s, argc;
   int count = 0;
   int special_key = 0;
+  bool discard = false;
   char c;
 
   char line_buff[LINE_BUFF_SIZE];
@@ -263,10 +270,38 @@ static void shell(void) {
     if (s != -1) {
       c = (char)s;
 
+      /* Ctrl+C cancels even an invalid/overlong unsubmitted line. */
+      if (s == 0x03) {
+        __cmd_exec_status = -1;
+#ifndef SHELL_NO_HISTORY
+        curr_command_ptr = total_num_commands;
+#endif
+        printf("^C\n");
+        return;
+      }
+
       if (c == CARRIAGE_RETURN || c == NEW_LINE) {
-        line_buff[count] = END_OF_LINE;
         __write_char__(NEW_LINE);
+        if (discard || special_key != 0) {
+          __cmd_exec_status = -1;
+          return;
+        }
+        line_buff[count] = END_OF_LINE;
         break;
+      }
+
+      /* Never execute a truncated prefix, including after editing keys. */
+      if (discard) continue;
+
+      if (special_key != 0) {
+        if (special_key == 1 && c == SQUARE_BRACKET_OPEN) {
+          special_key = 2;
+          continue;
+        }
+        if (special_key != 2 || (c != 'A' && c != 'B' && c != 'C' && c != 'D')) {
+          discard = true;
+          continue;
+        }
       }
 
       if (c == DELETE || c == BACK_SPACE) {
@@ -285,10 +320,7 @@ static void shell(void) {
       } else if (c == ESCAPE) {
         special_key = 1;
         continue;
-      } else if (c == SQUARE_BRACKET_OPEN && special_key == 1) {
-        special_key = 2;
-        continue;
-      } else if ((c == 'C' || c == 'D') && special_key != 0) {
+      } else if ((c == 'C' || c == 'D') && special_key == 2) {
         /* Ignore left/right arrow keys */
         special_key = 0;
         continue;
@@ -320,8 +352,12 @@ static void shell(void) {
       }
 #endif //SHELL_NO_TAB_COMPLETE
       else {
-        line_buff[count] = c;
-        count++;
+        if (s < 0x20 || s > 0x7e || count >= LINE_BUFF_SIZE - 1) {
+          discard = true;
+          continue;
+        }
+        line_buff[count++] = c;
+        line_buff[count] = END_OF_LINE;
       }
       if (__echo && c != DELETE && c != BACK_SPACE) {
         __write_char__(c);
@@ -344,7 +380,8 @@ static void shell(void) {
   argc = parse_line(argv, line_buff, MAX_ARG_COUNT);
 
   // execute the parsed commands
-  if (argc > 0) execute(argc, argv);
+  if (argc < 0) __cmd_exec_status = -1;
+  else if (argc > 0) execute(argc, argv);
 }
 
 static void exec_auto_cmds(void) {
@@ -426,7 +463,8 @@ int exec(char *cmd_str) {
   argc = parse_line(argv, cmd_str, MAX_ARG_COUNT);
 
   // execute the parsed commands
-  if (argc > 0) execute(argc, argv);
+  if (argc < 0) __cmd_exec_status = -1;
+  else if (argc > 0) execute(argc, argv);
 
   return __cmd_exec_status;
 }
