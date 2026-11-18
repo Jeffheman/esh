@@ -31,8 +31,8 @@ SHELL_ROOT=../../../shell
 -include $(SHELL_ROOT)/Makefile
 # ^^ Do not move the above line. All user targets to be defined below this line!
 
-GCC_FLAGS += -mcmodel=medany -fno-pie -fno-pic -msmall-data-limit=0
-ASM_FLAGS += -fno-pie -fno-pic
+GCC_FLAGS += -march=rv64gc -mabi=lp64d -mcmodel=medany -fno-pie -fno-pic -msmall-data-limit=0
+ASM_FLAGS += -march=rv64gc -mabi=lp64d -fno-pie -fno-pic
 
 RPC_MANIFEST = ../../../host/src/esh_mcp/data/riscv64-virt.json
 RPC_GENERATOR = ../../../tools/generate_rpc_board.py

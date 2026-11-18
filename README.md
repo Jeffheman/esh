@@ -51,11 +51,11 @@ make run
 ```
 ![Qemu Demo](docs/images/demo.gif)
 
-If you haven't done the `Quick Setup` as noted above, you'll need to install following utilities:
+If you haven't done the `Quick Setup` as noted above, you'll need to install the following utilities. The command below uses the Ubuntu 26.04 package name; on Ubuntu 22.04, replace `qemu-system-riscv` with `qemu-system-misc`. Both provide the `qemu-system-riscv64` executable.
 
 ```
 sudo apt install -y binutils make binutils-riscv64-linux-gnu gcc-riscv64-linux-gnu g++-riscv64-linux-gnu \
-                    qemu-system-riscv64
+                    qemu-system-riscv
 
 wget -P ~ https://git.io/.gdbinit
 
@@ -353,14 +353,16 @@ Shell 的 Ctrl+C 仅取消**尚未提交的输入**，不能中断正在执行�
 
 #### 环境准备
 
-主机要求 Python 3.10+、venv、GNU Make、RISC-V GNU 工具链与 QEMU。Ubuntu 22.04 可按需安装下列软件包；安装会修改系统软件环境，应由使用者确认后执行：
+主机要求 Python 3.10+、venv、GNU Make、RISC-V GNU 工具链与 QEMU。Ubuntu 26.04 可按需安装下列软件包；安装会修改系统软件环境，应由使用者确认后执行：
 
 ```sh
 sudo apt update
 sudo apt install -y python3-venv python3-pip make \
   gcc-riscv64-linux-gnu g++-riscv64-linux-gnu \
-  binutils-riscv64-linux-gnu qemu-system-misc
+  binutils-riscv64-linux-gnu qemu-system-riscv
 ```
+
+Ubuntu 22.04 请将上述 `qemu-system-riscv` 替换为 `qemu-system-misc`。Ubuntu 26.04 已将 RISC-V 模拟器拆分到独立包 `qemu-system-riscv`，仅安装 `qemu-system-misc` 不会提供 `qemu-system-riscv32` / `qemu-system-riscv64`。安装后可运行 `qemu-system-riscv64 --version` 确认可用。
 
 若使用已解包的本地工具链，先加载其环境，使 `riscv64-linux-gnu-gcc`、`g++`、`ld` 和 `qemu-system-riscv64` 可执行；不要依赖其他机器上的临时目录路径。
 
