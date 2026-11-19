@@ -15,234 +15,131 @@
  **/
 
 #include "printf.h"
-
 #include <stdarg.h>
-#include <stdbool.h>
 
-extern int (*__read_char__)(void);
 extern void (*__write_char__)(char c);
 
-/*
- * Skip the format support in printf if
- * SHELL_PRINTF_LITE is defined.
- *
- * Supporting formatting is expensive in
- * terms of memory.
- */
 #ifndef SHELL_PRINTF_LITE
-typedef enum {
-  CHECK_CH,
-  PARSE_FMT_STR,
-} printf_state;
+#if !defined(SHELL_NO_PRINTF_LL) && !defined(__C51__)
+typedef long long signed int print_signed_t;
+typedef long long unsigned int print_unsigned_t;
+#elif defined(__C51__)
+typedef signed long print_signed_t;
+typedef unsigned long print_unsigned_t;
+#else
+typedef signed int print_signed_t;
+typedef unsigned int print_unsigned_t;
+#endif
 
-static char hextable[] = {'0', '1', '2', '3', '4', '5', '6', '7',
-                          '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
+static const char SHELL_CODE hextable[] = "0123456789ABCDEF";
 
 static void outstr(const char *str) {
   while (*str != '\0') {
-    __write_char__(*str);
-    str++;
+    __write_char__(*str++);
   }
 }
 
-static bool printf_numbers(const char fmt, va_list *args, int l_count) {
+static bool printf_numbers(char fmt, va_list *args, int l_count) {
   char num[MAX_DIGITS];
   int num_len = 0;
+  print_signed_t signed_value;
+  print_unsigned_t value;
+  unsigned int base;
 
-  switch (fmt) {
-    case 'd': {
-/*
- * 32 bit targets require libgcc.a for this to work.
- * this results in increased binary size.
- * Allow skipping the %l and %ll if SHELL_NO_PRINTF_LL
- * is defined.
- */
-#ifndef SHELL_NO_PRINTF_LL
-      long long int value = 0;
-#else
-      int value = 0;
+  if (fmt != 'd' && fmt != 'u' && fmt != 'x' && fmt != 'X') {
+    outstr("\nprintf-error\n");
+    return false;
+  }
+  if (fmt == 'd') {
+    if (l_count == 0) {
+      signed_value = va_arg(*args, int);
+#if !defined(SHELL_NO_PRINTF_LL) || defined(__C51__)
+    } else if (l_count == 1) {
+      signed_value = va_arg(*args, long int);
+#ifndef __C51__
+    } else if (l_count == 2) {
+      signed_value = va_arg(*args, long long int);
 #endif
-      if (l_count == 0) {
-        value = va_arg(*args, int);
-/*
- * 32 bit targets require libgcc.a for this to work.
- * this results in increased binary size.
- * Allow skipping the %l and %ll if SHELL_NO_PRINTF_LL
- * is defined.
- */
-#ifndef SHELL_NO_PRINTF_LL
-      } else if (l_count == 1) {
-        value = va_arg(*args, long int);
-      } else if (l_count == 2) {
-        value = va_arg(*args, long long int);
 #endif
-      } else {
-        return false;
-      }
-
-      // handle negative
-      if (value < 0) {
-        __write_char__('-');
-        value = -value;
-      }
-
-      do {
-        num[num_len++] = hextable[value % 10];
-        value = value / 10;
-      } while (value > 0);
-
-      while (num_len > 0) {
-        __write_char__(num[--num_len]);
-      };
-      break;
-    }
-    case 'u':
-    case 'x':
-    case 'X': {
-/*
- * 32 bit targets require libgcc.a for this to work.
- * this results in increased binary size.
- * Allow skipping the %l and %ll if SHELL_NO_PRINTF_LL
- * is defined.
- */
-#ifndef SHELL_NO_PRINTF_LL
-      long long unsigned int value = 0;
-#else
-      unsigned int value = 0;
-#endif  // SHELL_NO_PRINTF_LL
-      if (l_count == 0) {
-        value = va_arg(*args, unsigned int);
-/*
- * 32 bit targets require libgcc.a for this to work.
- * this results in increased binary size.
- * Allow skipping the %lx and %llx if SHELL_NO_PRINTF_LL
- * is defined.
- */
-#ifndef SHELL_NO_PRINTF_LL
-      } else if (l_count == 1) {
-        value = va_arg(*args, long unsigned int);
-      } else if (l_count == 2) {
-        value = va_arg(*args, long long unsigned int);
-#endif  // SHELL_NO_PRINTF_LL
-      } else {
-        return false;
-      }
-
-      if (fmt == 'u') {
-        do {
-          num[num_len++] = hextable[value % 10];
-          value = value / 10;
-        } while (value > 0);
-
-        while (num_len > 0) {
-          __write_char__(num[--num_len]);
-        };
-      } else {
-        if (value == 0) {
-          __write_char__(hextable[0]);
-        } else {
-          // print hex
-          int start_bit = LAST_NIBBLE_FIRST_BIT;
-          bool leading_zero_ignored = false;
-
-          while (start_bit >= 0) {
-            int val = (value >> start_bit) & 0xF;
-            if (val || leading_zero_ignored) {
-              leading_zero_ignored = true;
-              __write_char__(hextable[val]);
-            }
-            start_bit -= 4;
-          }
-        }
-      }
-      break;
-    }
-    default:
-      outstr("\nprintf-error\n");
+    } else {
       return false;
+    }
+    value = (print_unsigned_t)signed_value;
+    if (signed_value < 0) {
+      __write_char__('-');
+      value = (print_unsigned_t)0 - value;
+    }
+  } else {
+    if (l_count == 0) {
+      value = va_arg(*args, unsigned int);
+#if !defined(SHELL_NO_PRINTF_LL) || defined(__C51__)
+    } else if (l_count == 1) {
+      value = va_arg(*args, unsigned long int);
+#ifndef __C51__
+    } else if (l_count == 2) {
+      value = va_arg(*args, unsigned long long int);
+#endif
+#endif
+    } else {
+      return false;
+    }
+  }
+
+  base = (fmt == 'x' || fmt == 'X') ? 16 : 10;
+  do {
+    num[num_len++] = hextable[value % base];
+    value /= base;
+  } while (value != 0);
+  while (num_len > 0) {
+    __write_char__(num[--num_len]);
   }
   return true;
 }
 
 int printf(const char *fmt, ...) {
-  printf_state state = CHECK_CH;
   va_list args;
-
+  int l_count;
+  int result = 0;
   va_start(args, fmt);
 
   while (*fmt) {
-    switch (state) {
-      case CHECK_CH: {
-        if (*fmt == '%') {
-          state = PARSE_FMT_STR;
-          fmt++;
-          continue;
-        }
-        __write_char__(*fmt);
-        fmt++;
+    if (*fmt != '%') {
+      __write_char__(*fmt++);
+      continue;
+    }
+    ++fmt;
+    while ((*fmt >= '0' && *fmt <= '9') || *fmt == '-') ++fmt;
+    if (*fmt == '\0') {
+      result = -1;
+      break;
+    }
+    if (*fmt == '%') {
+      __write_char__('%');
+    } else if (*fmt == 'c' || *fmt == 'C') {
+      __write_char__((char)va_arg(args, int));
+    } else if (*fmt == 's' || *fmt == 'S') {
+      outstr(va_arg(args, const char *));
+    } else {
+      l_count = 0;
+      while (*fmt == 'l' && l_count < 2) {
+        ++l_count;
+        ++fmt;
+      }
+      if (!printf_numbers(*fmt, &args, l_count)) {
+        result = -1;
         break;
       }
-      case PARSE_FMT_STR: {
-        // Support only basic format specifiers
-        while (*fmt && ((*fmt >= '0' && *fmt <= '9') || *fmt == '-')) {
-          fmt++;
-        }
-
-        switch (*fmt) {
-          case '%':
-            __write_char__(*fmt);
-            fmt++;
-            state = CHECK_CH;
-            break;
-          case 'c':
-          case 'C':
-            __write_char__(va_arg(args, int));
-            fmt++;
-            state = CHECK_CH;
-            break;
-          case 's':
-          case 'S':
-            outstr(va_arg(args, const char *));
-            fmt++;
-            state = CHECK_CH;
-            break;
-          case 'l': {
-            int l_count = 1;
-            fmt++;
-            if (*fmt == 'l') {
-              l_count++;
-              fmt++;
-            }
-            if (printf_numbers(*fmt, &args, l_count)) {
-              state = CHECK_CH;
-              fmt++;
-              break;
-            }
-            return -1;
-          }
-          default: {
-            if (printf_numbers(*fmt, &args, 0)) {
-              state = CHECK_CH;
-              fmt++;
-              break;
-            }
-            return -1;
-          }
-        }
-      }
     }
+    ++fmt;
   }
-
   va_end(args);
-  return 0;
+  return result;
 }
 #else
 int printf(const char *fmt, ...) {
   while (*fmt != '\0') {
-    __write_char__(*fmt);
-    fmt++;
+    __write_char__(*fmt++);
   }
   return 0;
 }
-
-#endif  // SHELL_PRINTF_LITE
+#endif

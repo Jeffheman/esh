@@ -20,12 +20,26 @@
 static rgn_info_t inp_buf_rgn, out_buf_rgn;
 static mode_t selected_mode = NONE;
 
+#ifdef __C51__
+void memlog_init(uint8_t xdata *addr, uint32_t size, mode_t mode) {
+#else
 void memlog_init(uint8_t *addr, uint32_t size, mode_t mode) {
+#endif
   selected_mode = mode;
 
   if (selected_mode == NONE) {
     return;
   }
+
+#ifdef __C51__
+  /* Validate before pointer arithmetic or the 16-bit memset size conversion. */
+  if (size == 0 || size > 0xffffUL ||
+      size > 0x10000UL - (uint32_t)(uint16_t)addr ||
+      ((selected_mode & INP_OUT) == INP_OUT && size < 2)) {
+    selected_mode = NONE;
+    return;
+  }
+#endif
 
   out_buf_rgn.addr = addr;
   out_buf_rgn.size = size / 2;
@@ -36,11 +50,11 @@ void memlog_init(uint8_t *addr, uint32_t size, mode_t mode) {
   inp_buf_rgn.curr_index = 0;
 
   if (!(selected_mode & INP)) {
-    // No input, use the extra memory for output.
+    /* No input, use the extra memory for output. */
 
     out_buf_rgn.size = size;
   } else if (!(selected_mode & OUT)) {
-    // No output, use the extra memory for input.
+    /* No output, use the extra memory for input. */
 
     inp_buf_rgn.addr = addr;
     inp_buf_rgn.size = size;
@@ -49,7 +63,9 @@ void memlog_init(uint8_t *addr, uint32_t size, mode_t mode) {
   memset(addr, 0, size);
 }
 
-int memlog_getc() {
+int memlog_getc(void) {
+  int val;
+
   if (!(selected_mode & INP)) {
     return -1;
   }
@@ -58,7 +74,7 @@ int memlog_getc() {
     return -1;
   }
 
-  int val = inp_buf_rgn.addr[inp_buf_rgn.curr_index];
+  val = inp_buf_rgn.addr[inp_buf_rgn.curr_index];
   inp_buf_rgn.addr[inp_buf_rgn.curr_index] = 0;
   inp_buf_rgn.curr_index++;
 

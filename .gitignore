@@ -9,3 +9,14 @@
 *.patch
 *.gdb
 **/objects/
+**/build/
+__pycache__/
+*.pyc
+*.obj
+*.abs
+*.hex
+*.m51
+*.uvgui.*
+*.uvguix.*
+*.uvopt
+*.uvoptx

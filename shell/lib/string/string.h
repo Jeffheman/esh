@@ -23,6 +23,15 @@ extern "C" {
 
 #include <stddef.h>
 
+#ifdef __C51__
+/* C51 intrinsics would otherwise bypass these implementations. */
+#define strlen esh_strlen
+#define strcmp esh_strcmp
+#define strcpy esh_strcpy
+#define memcpy esh_memcpy
+#define memset esh_memset
+#endif
+
 /**
  * @brief Finds the length of the string
  *

@@ -18,7 +18,9 @@
 
 int atoi(const char* str) {
   int res = 0;
-  for (int i = 0; str[i] != '\0'; ++i) {
+  int i;
+
+  for (i = 0; str[i] != '\0'; ++i) {
     res = res * 10 + str[i] - '0';
   }
   return res;
@@ -27,8 +29,9 @@ int atoi(const char* str) {
 uint32_t atoh(const char* str) {
   uint32_t hex = 0;
   uint32_t value = 0;
+  uint32_t i;
 
-  for (uint32_t i = 0; str[i] != '\0'; i++) {
+  for (i = 0; str[i] != '\0'; i++) {
     if (str[i] >= '0' && str[i] <= '9') {
       value = str[i] - '0';
     } else if (str[i] >= 'a' && str[i] <= 'f') {
@@ -39,7 +42,7 @@ uint32_t atoh(const char* str) {
       continue;
     }
 
-    // make space for the new nibble on the right
+    /* Make space for the new nibble on the right. */
     hex = hex << 4;
     hex |= value;
   }

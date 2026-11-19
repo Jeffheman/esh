@@ -21,7 +21,7 @@
 extern "C" {
 #endif
 
-#include <stdint.h>
+#include "esh_port.h"
 
 /**
  * @brief Converts provided string to integer
@@ -41,4 +41,4 @@ uint32_t atoh(const char* str);
 }
 #endif
 
-#endif  // __A2I_H__
+#endif /* __A2I_H__ */

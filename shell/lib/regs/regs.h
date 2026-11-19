@@ -21,13 +21,18 @@
 extern "C" {
 #endif
 
-#include <stdint.h>
+#include "esh_port.h"
 
 #include "a2i.h"
 #include "printf.h"
 #include "string.h"
 
+#ifdef __C51__
+/* The caller must validate the complete 32-bit access before narrowing. */
+#define reg32(addr) (*((volatile uint32_t xdata *)((uint16_t)(addr))))
+#else
 #define reg32(addr) (*((volatile uint32_t *)((uintptr_t)(addr))))
+#endif
 
 #ifdef __cplusplus
 }

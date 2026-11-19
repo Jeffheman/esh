@@ -37,6 +37,146 @@ this is a perfect tool for getting up and running with a new board in less than 
 | ARM v7 M-class 32 bit    |Cortex-m4             | examples/physical/nucleo-f401re              | nucleo-f401re (Physical Board)    |
 | ARM v7 M-class 32 bit    |Cortex-m4             | examples/physical/tiva-c                     | tiva-c (Physical Board)           |
 
+## Keil C51 / 8051
+
+The C51 backend uses the same shell, history, Tab completion, `ADD_CMD`, `AUTO_CMD`,
+`exec`, help/status, memory commands and memlog implementation. GNU builds remain
+unchanged. The example targets an 8052-compatible UART at 9600 baud / 11.0592 MHz
+with external XDATA RAM and the LARGE memory model.
+
+From the repository root, with Python 3.9+ and a licensed Keil C51 installation:
+
+```shell
+python shell/toolchains/keil-c51/build.py --keil-root "E:/DEVSDK/Keil_v5" --project-dir examples/emulation/8051-keil
+```
+
+Alternatively, set `KEIL_C51_ROOT` and run GNU Make in
+`examples/emulation/8051-keil`. The C51 Make entry does not require Unix utilities.
+The build uses C51, A51, BL51 and OH51, producing
+`build/esh.abs`, `build/esh.hex`, compiler listings and a BL51 memory map (the
+Makefile names the image `esh-8051`). `--compile-only` explicitly stops before
+linking; it is not an execution test. [Keil's C51 evaluation limits](https://www2.keil.com/limits)
+restrict both linking and debugging to 2KB, so obtaining a full image from another
+machine does not remove the local debugger's limit. Complete full-shell linking
+and simulation in an appropriately licensed C51 environment; see
+[Keil license management](https://www.keil.com/download/license) for PSN/CID/LIC
+activation requirements. Do not use `SHELL_LITE` as a substitute for full-feature
+validation.
+
+Integration details:
+
+- Set `TOOLCHAIN = keil-c51` before including `shell/Makefile`, or call the Python
+  builder directly. It discovers project `.c`, `.a51`, `.asm` sources and
+  `.h`/`.inc` include directories recursively, including uppercase filenames.
+  C sources use C51; Keil assembly sources use A51. Repeated `--source` and
+  `--include` options select sources and include paths; `--define` sets C
+  preprocessor definitions. GNU assembly syntax and C++ are not supported.
+  Select a project startup explicitly with `--startup`; it is assembled once,
+  even if also found by discovery or listed with `--source`.
+  Make accepts `C51_DEFINES` and `C51_BUILD_ARGS`, and forwards the existing
+  `PROMPT` and `ECHO_INIT_VALUE` settings (C51 defaults: `esh` and `1`). Explicit
+  `C51_DEFINES` can override those values. Opt-in `SHELL_LITE=1` still applies
+  when custom definitions are supplied on the Make command line.
+- Command tables are generated from **C51-preprocessed output**, honoring feature
+  guards and commands in separate translation units. Static command functions
+  work without maintaining a second manual registration list. Both command
+  descriptors and tables live in CODE memory. Keep command function names unique.
+- C51 uses `DEBUG OBJECTEXTEND` so the debugger knows the widths of variables.
+  Without extended type information, the debugger can read only one byte of a
+  multi-byte test result; the simulator runner rejects such images.
+- BL51 `NOOVERLAY` is required because command/UART callbacks are indirect.
+  Unresolved external symbols (`L1`/`L2`) stop the build before HEX conversion,
+  even though BL51 reports them as warnings and produces an absolute image.
+  Callbacks keep their normal `int (int, char **)`, `int (void)` and `void (char)`
+  signatures. `exec` and its dispatcher use a reentrant stack to allow a command
+  to invoke another command; recursive entry into a non-reentrant user command
+  is not supported by C51.
+- The provided startup clears IDATA and XDATA `0000H–EFFFH`, initializes the LARGE
+  reentrant stack at `FF00H`, then enters the C runtime. BL51 excludes the upper
+  4KB from static allocation. Reserve that region for the stack, provide suitable
+  RAM, or supply a board-specific `--startup` and matching `--xdata-range`.
+  Reversed/out-of-range bounds are rejected; with the default startup, static
+  allocation above `EFFFH` is rejected to protect the reentrant stack.
+- `r32`, `w32`, `read`, `rb`, `wb` access XDATA, not CODE or SFR space, and reject
+  accesses beyond the 16-bit address range. C51 memlog buffers also reside in
+  XDATA. These accesses are non-atomic on an 8-bit CPU.
+- C51 is C90, with 16-bit `int`, 32-bit `long` and no native `long long` or C++.
+  `%d/%u/%x` use `int`; `%ld/%lu/%lx` retain full 32-bit values. `%ll` is rejected
+  on C51 instead of silently truncating; GNU builds retain native 64-bit formats.
+  Cast variadic string arguments to `const char *` and character/numeric arguments
+  to the requested type because C51 memory-specific pointers and constants can
+  have different widths. The implementation does not add field-width padding.
+- C51 has no GNU weak symbols. Define `SHELL_CUSTOM_SETUP`, `SHELL_CUSTOM_LOOP`,
+  `SHELL_CUSTOM_PREPEND_PROMPT`, `SHELL_CUSTOM_ACTIVE_PROMPT` or
+  `SHELL_CUSTOM_INITIAL_SETUP` when supplying the corresponding hook.
+
+Shared functional regression tests:
+
+```shell
+python tests/keil-c51/test_build.py
+python tests/keil-c51/run_host.py
+python tests/keil-c51/run_arm.py
+python shell/toolchains/keil-c51/build.py --keil-root "E:/DEVSDK/Keil_v5" --project-dir tests/keil-c51 --source tests/keil-c51/test_shell.c --standalone
+python tests/keil-c51/run_simulator.py --keil-root "E:/DEVSDK/Keil_v5" --image tests/keil-c51/build/esh.abs --suite shell
+```
+
+For MSVC outside a developer prompt, pass `--vcvars ".../vcvars64.bat"` to the
+host runner. The ARM runner accepts `--toolchain-prefix` and `--qemu` paths when
+those tools are not on PATH. Host tests do not validate the 8051 ABI. Full C51
+validation requires a licensed build: the simulator requires exactly 64 assertions,
+zero failures and completion, in addition to valid debugger types and RAM prefill.
+The host variant has 58 assertions. The full test fixture rejects disabled history,
+Tab completion, utilities, bit utilities and `SHELL_PRINTF_LITE` at compile time.
+The tests exercise shell behavior, formatting, memory commands and memlog.
+Memory-command tests use a bounded array substitute; the C51 fixture additionally
+checks the production `reg32` macro against owned XDATA storage for full-width
+32-bit reads and writes. Hardware UART/electrical timing still requires a board test.
+
+When GNU Make is on PATH (or `MAKE` names its executable), `test_build.py` also
+checks Make configuration forwarding and operation without Unix utilities.
+Set `KEIL_C51_ROOT` when running `test_build.py` to additionally compile the full
+C51 fixture, check its preprocessed assertion count against `SHELL_CHECKS` in the
+simulator runner, and verify rejection of reduced configurations. C51's
+`SHELL_NO_PRINTF_LL` remains allowed because its 32-bit formatting is retained.
+These native compiler checks do not link or execute the full shell. When changing
+the assertions, update the expected count and review coverage rather than lowering
+the acceptance threshold to make an incomplete run pass.
+
+A separate, small **toolchain smoke test** also runs within the evaluation license:
+
+```shell
+python shell/toolchains/keil-c51/build.py --keil-root "E:/DEVSDK/Keil_v5" --project-dir tests/keil-c51 --source tests/keil-c51/toolchain_smoke.c --standalone --output-dir tests/keil-c51/build/smoke --name toolchain-smoke
+python tests/keil-c51/run_simulator.py --keil-root "E:/DEVSDK/Keil_v5" --image tests/keil-c51/build/smoke/toolchain-smoke.abs --suite smoke
+```
+
+It verifies C51/A51/BL51/OH51 integration, startup initialization, CODE command
+tables, indirect callbacks, the LARGE reentrant stack and native 32-bit XDATA
+register reads/writes. It does **not** contain
+the shell and cannot replace the full functional test. The Windows simulator
+runner uses a temporary copy of the installed `C51/Examples/HELLO/Hello.uvproj`
+as a debugger template, leaving the installation unchanged. It requires the
+matching `.m51` map to locate `?C_C51STARTUP`. At that startup breakpoint it checks
+debugger type widths, poisons XDATA and an upper IDATA byte, and confirms the
+prefill before continuing. It logs results at the completion breakpoint and stops
+only its own debugger after `--timeout` seconds (default 20). Missing or failing
+results produce a nonzero exit code; the log is saved beside the image as
+`*.sim.log`.
+
+To verify that the initialization checks detect real failures:
+
+```shell
+python tests/keil-c51/test_startup.py --keil-root "E:/DEVSDK/Keil_v5"
+```
+
+This builds the independent smoke from mixed uppercase C/A51/ASM and H/INC
+fixtures, checks that C receives the expected return value from an assembly
+function, and exercises automatic and explicit source selection. It checks three
+simulator runs: normal startup must pass; temporary startup copies with either
+the XDATA or IDATA clearing instruction replaced by a NOP must fail. Custom
+startup include paths and duplicate-startup exclusion are also exercised.
+The production startup is never modified. Images, maps, listings and logs are
+retained under `tests/keil-c51/build/startup-validation`.
+
 # Quick Setup
 
 Execute `./manage -s` or `.scripts/setup` to install all the dependencies.

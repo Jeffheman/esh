@@ -75,7 +75,9 @@ extern "C" {
 #endif
 
 
+#ifndef NULL
 #define NULL ((void *)0)
+#endif
 #define TRUE (1 == 1)
 #define FALSE (1 == 0)
 

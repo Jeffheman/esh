@@ -16,7 +16,6 @@
 
 MAKEFLAGS += --silent
 MAKEFLAGS += --no-builtin-rules
-MAKEFLAGS += --jobs=$(shell nproc)
 
 # Save the object files in this directory
 BUILD_PATH = objects
@@ -29,6 +28,11 @@ ifeq ($(SHELL_ROOT),)
     $(error )
 endif
 
+ifeq ($(TOOLCHAIN),keil-c51)
+include $(SHELL_ROOT)/toolchains/keil-c51/keil-c51.mk
+else
+
+MAKEFLAGS += --jobs=$(shell nproc)
 -include $(SHELL_ROOT)/build-magic/defaults.mk
 
 # When set to 1, print dots for progress
@@ -167,3 +171,4 @@ clean::
 # preserve all the object and the project elf file(s)
 .PRECIOUS: $(OBJS) $(PROJECT).elf
 VPATH = $(shell dirname $(SRC_C) $(SRC_CPP) $(FILTERED_SRC_ASM) $(STARTUP_FILE))
+endif

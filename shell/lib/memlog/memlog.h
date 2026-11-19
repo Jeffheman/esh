@@ -17,20 +17,24 @@
 #ifndef __MEMLOG_H__
 #define __MEMLOG_H__
 
-#include <stdint.h>
+#include "esh_port.h"
 
 typedef enum mode {
-  NONE = 0, // No logging
-  INP = 1, // Only getc
-  OUT = 2, // Only putc
-  INP_OUT = 3, // Both getc & putc
+  NONE = 0, /* No logging */
+  INP = 1, /* Only getc */
+  OUT = 2, /* Only putc */
+  INP_OUT = 3 /* Both getc & putc */
 } mode_t;
 
 typedef struct rgn_info {
+#ifdef __C51__
+  volatile uint8_t xdata *addr;
+#else
   volatile uint8_t *addr;
+#endif
   uint32_t size;
 
-  int curr_index;
+  uint32_t curr_index;
 } rgn_info_t;
 
 /**
@@ -39,8 +43,15 @@ typedef struct rgn_info {
  * @param addr Starting address of the memory block used for logging
  * @param size Size of the memory block used for logging
  * @param mode Logging mode
+ *
+ * On C51 the block must fit in xdata and in the 16-bit memset size.
+ * Invalid or empty C51 buffer ranges disable logging without accessing memory.
  */
+#ifdef __C51__
+void memlog_init(uint8_t xdata *addr, uint32_t size, mode_t mode);
+#else
 void memlog_init(uint8_t *addr, uint32_t size, mode_t mode);
+#endif
 
 /**
  * @brief Gets a character from memory input buffer
@@ -56,4 +67,4 @@ int memlog_getc(void);
  */
 void memlog_putc(char c);
 
-#endif // __MEMLOG_H__
+#endif /* __MEMLOG_H__ */

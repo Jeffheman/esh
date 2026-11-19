@@ -21,7 +21,7 @@
 extern "C" {
 #endif
 
-#include <stdint.h>
+#include "esh_port.h"
 
 #include "a2i.h"
 #include "printf.h"
@@ -33,7 +33,7 @@ extern "C" {
  *
  * @param cmd_str command string to be executed
  */
-int exec(char *cmd_str);
+int exec(char *cmd_str) SHELL_REENTRANT;
 
 /**
  * @brief Expected format of the user defined function
@@ -63,9 +63,14 @@ typedef struct {
  * @param _function fucntion that needs to be made available in the shell
  *
  */
+#if defined(__C51__) || defined(SHELL_STATIC_COMMANDS)
+#define ADD_CMD(_name, _help_string, _function) \
+  const cmd_t SHELL_CODE esh_cmd_##_function = {#_name, _help_string, &_function}
+#else
 #define ADD_CMD(_name, _help_string, _function) \
   __attribute__((section(".cmd_list")))         \
   cmd_t _var##_function = {#_name, _help_string, &_function}
+#endif
 
 /**
  * @brief Format for the user to add a command to be executed quickly after boot
@@ -77,9 +82,17 @@ typedef struct {
  * @param _function fucntion that needs to be made available in the shell
  *
  */
+#if defined(__C51__) || defined(SHELL_STATIC_COMMANDS)
+#define AUTO_CMD(_name, _help_string, _function) \
+  const cmd_t SHELL_CODE esh_auto_##_function = {#_name, _help_string, &_function}
+typedef const cmd_t SHELL_CODE *cmd_ref;
+extern cmd_ref const SHELL_CODE esh_commands[];
+extern cmd_ref const SHELL_CODE esh_auto_commands[];
+#else
 #define AUTO_CMD(_name, _help_string, _function) \
   __attribute__((section(".auto_list")))         \
   cmd_t _var##_function = {#_name, _help_string, &_function}
+#endif
 
 /**
  * @brief Looks for and returns address of the function triggered by a command string
@@ -129,6 +142,12 @@ void set_write_char(void (*func)(char));
  * }
  */
 void platform_init(void);
+void initial_setup(void);
+void prompt(void);
+void setup(void);
+void loop(void);
+void prepend_prompt(void);
+int active_prompt(void);
 
 #ifdef __cplusplus
 }
