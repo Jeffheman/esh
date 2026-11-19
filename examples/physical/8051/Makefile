@@ -14,10 +14,9 @@
 # limitations under the License.
 #
 
-# Build for a classic 80C51 with SDCC.
+# Build the MCS-51 shell with the Star TX-only UART driver using SDCC.
 #
 #   make
-#   make F_CPU=12000000UL UART_BAUD=19200
 #   make SDCC_LIB=/path/to/sdcc/lib/small-stack-auto \
 #        SDCC_INCLUDE=/path/to/sdcc/include
 #
@@ -38,18 +37,21 @@ SDCC_INCLUDE ?=
 PROJECT ?= esh8051
 PROMPT ?= 8051
 
-F_CPU ?= 11059200UL
-UART_BAUD ?= 9600
-
 LINE_BUFF_SIZE ?= 12
 MAX_ARG_COUNT ?= 6
 # --stack-auto needs room for the shell buffers and printf's division helpers.
-# 256 bytes covers 8052-class parts and most 8051 derivatives.
 IRAM_SIZE ?= 256
+CODE_LOC ?= 0x0000
+CODE_SIZE ?= 0x3000
+# CODE/XDATA share SRAM; trunk reserves 0x3AE0-0x3FFF for buffers and IRAM.
+XRAM_LOC ?= 0x3000
+XRAM_SIZE ?= 0x0AE0
 
 OPTIMIZATION ?= --opt-code-size
 SDCC_FLAGS = -mmcs51 --model-small --stack-auto --iram-size $(IRAM_SIZE)
 SDCC_FLAGS += $(OPTIMIZATION)
+SDCC_LINK_FLAGS = --code-loc $(CODE_LOC) --code-size $(CODE_SIZE)
+SDCC_LINK_FLAGS += --xram-loc $(XRAM_LOC) --xram-size $(XRAM_SIZE)
 
 SHELL_ROOT = ../../../shell
 
@@ -65,8 +67,6 @@ DEFINES += -DSHELL_NO_UTILS
 DEFINES += -DSHELL_NO_BIT_UTILS
 DEFINES += -DLINE_BUFF_SIZE=$(LINE_BUFF_SIZE)
 DEFINES += -DMAX_ARG_COUNT=$(MAX_ARG_COUNT)
-DEFINES += -DF_CPU=$(F_CPU)
-DEFINES += -DUART_BAUD=$(UART_BAUD)
 DEFINES += -D__PROMPT__=$(PROMPT)
 DEFINES += -D__BUILD_USER__=$(BUILD_USER)
 DEFINES += -D__BUILD_HOST__=$(BUILD_HOST)
@@ -99,8 +99,8 @@ $(PROJECT).hex: $(PROJECT).ihx
 	@echo "=== $(PROJECT).hex ==="
 	@cat $(PROJECT).mem
 
-$(PROJECT).ihx: $(OBJECTS) $(TABLE_OBJECT)
-	$(SDCC) $(SDCC_FLAGS) $(LIB_FLAGS) $^ -o $@
+$(PROJECT).ihx: $(OBJECTS) $(TABLE_OBJECT) Makefile
+	$(SDCC) $(SDCC_FLAGS) $(SDCC_LINK_FLAGS) $(LIB_FLAGS) $(OBJECTS) $(TABLE_OBJECT) -o $@
 
 $(TABLE_SOURCE): $(OBJECTS) tools/gen_shell_cmd_table.sh
 	SDNM=$(SDNM) tools/gen_shell_cmd_table.sh $(OBJECTS) > $@
@@ -117,7 +117,7 @@ objects/%.rel: %.c | objects
 objects/platform.rel: platform/platform.c | objects
 	$(SDCC) $(SDCC_FLAGS) $(DEFINES) $(INCLUDES) -c $< -o $@
 
-objects/uart.rel: platform/uart.c | objects
+objects/uart.rel: platform/uart.c platform/uart.h platform/star2.h platform/star2_spi_slv_reg.h | objects
 	$(SDCC) $(SDCC_FLAGS) $(DEFINES) $(INCLUDES) -c $< -o $@
 
 objects/shell.rel: $(SHELL_ROOT)/shell/shell.c | objects
@@ -146,4 +146,5 @@ help:
 	@echo "make clean        Remove build outputs"
 	@echo
 	@echo "Overridable: SDCC, PACKIHX, SDNM, SDCC_LIB, SDCC_INCLUDE,"
-	@echo "             F_CPU, UART_BAUD, LINE_BUFF_SIZE, MAX_ARG_COUNT"
+	@echo "             IRAM_SIZE, CODE_LOC, CODE_SIZE, XRAM_LOC, XRAM_SIZE,"
+	@echo "             LINE_BUFF_SIZE, MAX_ARG_COUNT"

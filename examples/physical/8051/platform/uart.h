@@ -21,24 +21,13 @@
 extern "C" {
 #endif
 
-/**
- * Configure the on-chip UART for 8N1 at UART_BAUD. Timer 1 in mode 2
- * generates the baud clock, so timer 0 remains available to the application.
- */
+/* Star P40 调试输出；等待 SPI 域就绪，使用 TCTL=0x11、TPR=0xB2。 */
 void uart_init(void);
 
-/**
- * @brief Polling byte input.
- *
- * Blocks until a byte is received, then clears RI.
- */
+/* 此硬件路径仅支持发送；始终返回 -1，表示没有输入。 */
 int uart_getc(void);
 
-/**
- * @brief Polling byte output.
- *
- * Blocks until the transmit buffer is free, then clears TI.
- */
+/* 阻塞至 Star TCTL.3 报告发送完成，再清除完成标志。 */
 void uart_putc(char c);
 
 #ifdef __cplusplus
