@@ -11,6 +11,7 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch, Mock
+import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("c51_build", ROOT / "shell/toolchains/keil-c51/build.py")
@@ -128,6 +129,56 @@ class MakeEntryTests(unittest.TestCase):
         command = self.run_make("ECHO_INIT_VALUE=0", "C51_DEFINES=ECHO_INIT_VALUE=1")
         self.assertLess(command.index('--define "ECHO_INIT_VALUE=0"'),
                         command.index('--define "ECHO_INIT_VALUE=1"'))
+
+
+class UvisionProjectTests(unittest.TestCase):
+    def setUp(self):
+        self.project = ROOT / "examples/emulation/8051-keil"
+        self.target = ET.parse(self.project / "esh-8051.uvproj").find("./Targets/Target")
+
+    def test_native_project_sources_and_memory_settings(self):
+        sources = []
+        for entry in self.target.findall("./Groups/Group/Files/File"):
+            path = (self.project / entry.findtext("FilePath").replace("\\", "/")).resolve()
+            self.assertTrue(path.is_file(), path)
+            if entry.findtext("FileType") in ("1", "2"):
+                sources.append(path)
+        expected = [self.project / name for name in ("hello.c", "platform.c", "commands_uv.c")]
+        expected += [ROOT / "shell/shell/shell.c", ROOT / "shell/toolchains/keil-c51/startup.a51"]
+        expected += list((ROOT / "shell/lib").rglob("*.c"))
+        self.assertCountEqual(sources, expected)
+        options = self.target.find("TargetOption")
+        self.assertEqual(options.findtext("Target51/Target51Misc/MemoryModel"), "2")
+        self.assertEqual(options.findtext("Target51/C51/ObjectExtend"), "1")
+        self.assertEqual(options.findtext("Target51/C51/IntegerPromotion"), "1")
+        self.assertIn("NOOVERLAY", options.findtext("Target51/Lx51/MiscControls"))
+        self.assertEqual(options.findtext("Target51/Lx51/XDataBaseAddress"), "0x0000-0xEFFF")
+        self.assertEqual(options.findtext("TargetCommonOption/CreateHexFile"), "1")
+        self.assertEqual(options.findtext("DebugOption/Simulator/UseSimulator"), "1")
+        for hook in ("BeforeCompile", "BeforeMake", "AfterMake"):
+            for step in ("RunUserProg1", "RunUserProg2"):
+                self.assertEqual(options.findtext(f"TargetCommonOption/{hook}/{step}"), "0")
+
+    @unittest.skipUnless(os.environ.get("KEIL_C51_ROOT"), "Set KEIL_C51_ROOT to verify native command tables")
+    def test_native_tables_match_automatic_registration(self):
+        definitions = self.target.findtext("TargetOption/Target51/C51/VariousControls/Define").split(",")
+        for feature in (None, "SHELL_NO_HISTORY", "SHELL_NO_UTILS", "SHELL_NO_BIT_UTILS"):
+            with self.subTest(feature=feature), tempfile.TemporaryDirectory(prefix="esh-uvision-table-") as temp:
+                command = [sys.executable, str(ROOT / "shell/toolchains/keil-c51/build.py"),
+                           "--keil-root", os.environ["KEIL_C51_ROOT"], "--project-dir", str(self.project),
+                           "--output-dir", temp, "--compile-only"]
+                for definition in definitions + ([feature] if feature else []):
+                    command.extend(["--define", definition])
+                result = subprocess.run(command, capture_output=True, text=True, timeout=60)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertNotIn("*** WARNING", result.stdout + result.stderr)
+                native = next(Path(temp).glob("*_commands_uv.i")).read_text(errors="replace")
+                generated = (Path(temp) / "commands.c").read_text()
+                for table in ("esh_commands", "esh_auto_commands"):
+                    pattern = rf"\b{table}\s*\[\]\s*=\s*\{{([^}}]+)\}}"
+                    native_body = re.search(pattern, native).group(1)
+                    generated_body = re.search(pattern, generated).group(1)
+                    self.assertEqual(re.findall(r"&\w+", native_body), re.findall(r"&\w+", generated_body))
 
 
 class ProjectDiscoveryTests(unittest.TestCase):

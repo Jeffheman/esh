@@ -14,12 +14,15 @@ typedef unsigned char bool;
 #define SHELL_CODE code
 #define SHELL_REENTRANT reentrant
 #define SHELL_WEAK
+/* C51 warns on (void)value; self-assignment is optimized away. */
+#define SHELL_UNUSED(value) ((value) = (value))
 #else
 #include <stdint.h>
 #include <stdbool.h>
 #define SHELL_CODE
 #define SHELL_REENTRANT
 #define SHELL_WEAK __attribute__((weak))
+#define SHELL_UNUSED(value) ((void)(value))
 #endif
 
 #endif

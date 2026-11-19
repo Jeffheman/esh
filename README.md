@@ -44,6 +44,21 @@ The C51 backend uses the same shell, history, Tab completion, `ADD_CMD`, `AUTO_C
 unchanged. The example targets an 8052-compatible UART at 9600 baud / 11.0592 MHz
 with external XDATA RAM and the LARGE memory model.
 
+For a native µVision project, open
+[`examples/emulation/8051-keil/esh-8051.uvproj`](examples/emulation/8051-keil/esh-8051.uvproj),
+select `Simulator`, and press F7 to build. No Python or Make is required. The image,
+HEX and map are written to `examples/emulation/8051-keil/build/uvision/`.
+Use Ctrl+F5 to enter the simulator, open `View > Serial Windows > UART #1`, then
+press F5 to run. The simulator maps 64KB of XDATA; a physical board needs suitable
+external RAM or a board-specific startup and memory layout.
+
+The native project defines `ESH_UVISION_COMMANDS` and uses `commands_uv.c` for its
+command tables. When adding or removing `ADD_CMD`/`AUTO_CMD` registrations, update
+that file too; automatic commands belong in both tables. The Python/Make backend
+still generates its tables automatically and excludes these native tables.
+Native build user/host are `uVision`; Git revisions are `unknown` unless overridden
+in the target's C51 definitions. A licensed C51 toolchain is required for the full image.
+
 From the repository root, with Python 3.9+ and a licensed Keil C51 installation:
 
 ```shell

@@ -138,6 +138,8 @@ static void add_command_to_history(const char *cmd_str) {
 static int show_history(int argc, char **argv) {
   int index;
   int beg_index = 0;
+  SHELL_UNUSED(argc);
+  SHELL_UNUSED(argv);
   if (total_num_commands > NUM_HISTORY_ENTRIES) {
     beg_index = total_num_commands - NUM_HISTORY_ENTRIES;
   }
@@ -363,6 +365,8 @@ static void exec_auto_cmds(void) {
 }
 
 static int build_info(int argc, char **argv) {
+  SHELL_UNUSED(argc);
+  SHELL_UNUSED(argv);
   printf("Build: [" SHELL_VERSION ":" USER_REPO_VERSION "] - [" BUILD_USER
          "@" BUILD_HOST "] - " __DATE__ " - " __TIME__ "\n");
   return 0;
@@ -492,6 +496,8 @@ int help(int argc, char **argv) {
 }
 
 int cmd_exec_status(int argc, char **argv) {
+  SHELL_UNUSED(argc);
+  SHELL_UNUSED(argv);
   printf("%d\n", __cmd_exec_status);
   return 0;
 }

@@ -9,8 +9,8 @@ static int hello(int argc, char **argv) {
 }
 
 static int boot(int argc, char **argv) {
-  (void)argc;
-  (void)argv;
+  SHELL_UNUSED(argc);
+  SHELL_UNUSED(argv);
   printf("8051 UART: 9600 baud, 11.0592 MHz, LARGE model\n");
   return 0;
 }
