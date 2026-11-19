@@ -26,6 +26,9 @@ extern "C" {
 // If the 64 bit support is disabled then 2^32-1 which is ~10^10
 #ifndef SHELL_NO_PRINTF_LL
 #define MAX_DIGITS 20
+#elif defined(__SDCC)
+/* SDCC's int is 16 bit, so five digits are enough. */
+#define MAX_DIGITS 6
 #else
 #define MAX_DIGITS 10
 #endif
@@ -34,7 +37,8 @@ extern "C" {
 #ifndef SHELL_NO_PRINTF_LL
 #define LAST_NIBBLE_FIRST_BIT 60
 #else
-#define LAST_NIBBLE_FIRST_BIT 28
+/* Derive from the actual int width: 28 on 32-bit targets, 12 on 16-bit. */
+#define LAST_NIBBLE_FIRST_BIT ((int)(sizeof(unsigned int) * 8) - 4)
 #endif
 /**
  * @brief prints an unformatted string to the UART

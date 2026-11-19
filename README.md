@@ -36,6 +36,7 @@ this is a perfect tool for getting up and running with a new board in less than 
 | RISC-V 32 bit (RV32IMAC) |SiFive E31            | examples/physical/hifive                     | hifive1-revb (Physical Board)     |
 | ARM v7 M-class 32 bit    |Cortex-m4             | examples/physical/nucleo-f401re              | nucleo-f401re (Physical Board)    |
 | ARM v7 M-class 32 bit    |Cortex-m4             | examples/physical/tiva-c                     | tiva-c (Physical Board)           |
+| 8051 8-bit (MCS-51)      |8052-class (SDCC)     | examples/physical/8051                       | STC89C52RC / AT89C52             |
 
 # Quick Setup
 

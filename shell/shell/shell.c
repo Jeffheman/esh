@@ -24,11 +24,27 @@
 int (*__read_char__)(void);
 void (*__write_char__)(char c);
 
+#if SHELL_SDCC
+extern SHELL_CODE cmd_t *const shell_cmd_table[];
+extern SHELL_CODE cmd_t *const shell_auto_table[];
+
+static const cmd_t *cmd_at(int i) { return shell_cmd_table[i]; }
+static const cmd_t *auto_at(int i) { return shell_auto_table[i]; }
+#else
 extern unsigned long int __CMD_TABLE_START__;
 extern unsigned long int __AUTO_TABLE_START__;
 
 static const cmd_t *volatile table = (cmd_t *)&__CMD_TABLE_START__;
 static const cmd_t *volatile auto_load = (cmd_t *)&__AUTO_TABLE_START__;
+
+static const cmd_t *cmd_at(int i) {
+  return table[i].command_name != NULL ? &table[i] : NULL;
+}
+static const cmd_t *auto_at(int i) {
+  return auto_load[i].command_name != NULL ? &auto_load[i] : NULL;
+}
+#endif
+
 static volatile int __cmd_exec_status;
 
 /*
@@ -48,22 +64,41 @@ void set_read_char(int (*func)(void)) { __read_char__ = func; }
 
 void set_write_char(void (*func)(char)) { __write_char__ = func; }
 
-__attribute__((weak)) void setup(void) {
+#if SHELL_SDCC
+void setup(void) {
   // to be provided by the user
 }
 
-__attribute__((weak)) void loop(void) {
+void loop(void) {
   // to be provided by the user
 }
 
 // This method is a place holder to prepend prompt
-__attribute__((weak)) void prepend_prompt() {
+void prepend_prompt(void) {
   ;  // nothing by default
 }
 
 // Check if prompt is active, by default true.
 // Platforms can decide a logic for this.
-__attribute__((weak)) int active_prompt() { return TRUE; }
+int active_prompt(void) { return TRUE; }
+#else
+SHELL_WEAK void setup(void) {
+  // to be provided by the user
+}
+
+SHELL_WEAK void loop(void) {
+  // to be provided by the user
+}
+
+// This method is a place holder to prepend prompt
+SHELL_WEAK void prepend_prompt(void) {
+  ;  // nothing by default
+}
+
+// Check if prompt is active, by default true.
+// Platforms can decide a logic for this.
+SHELL_WEAK int active_prompt(void) { return TRUE; }
+#endif
 
 static void delete(void) {
   __write_char__(BACK_SPACE);
@@ -160,20 +195,20 @@ static int prefix_match(char *sub, int len, const char *str) {
   return TRUE;
 }
 static void handle_tab(char *cmd_buff, int *char_count) {
-  if (cmd_buff == NULL || char_count <= 0) {
+  if (cmd_buff == NULL || char_count == NULL || *char_count <= 0) {
     return;
   }
 
   int i = 0;
   int match_count = 0;
   int last_match = -1;
-  while (table[i].command_name != NULL) { //loop over all commands
+  while (cmd_at(i) != NULL) { //loop over all commands
 
     //if prefix matches, print that as one of the options
-    if (prefix_match(cmd_buff, *char_count, table[i].command_name)) {
+    if (prefix_match(cmd_buff, *char_count, cmd_at(i)->command_name)) {
       match_count++;
       last_match = i;
-      printf("\n%s", table[i].command_name);
+      printf("\n%s", cmd_at(i)->command_name);
     }
 
     i++;
@@ -181,8 +216,13 @@ static void handle_tab(char *cmd_buff, int *char_count) {
 
   // if only one match, then that's the command to be executed
   if (match_count == 1) {
-    memcpy(cmd_buff, table[last_match].command_name, LINE_BUFF_SIZE);
-    *char_count = strlen(cmd_buff);
+    int name_len = strlen(cmd_at(last_match)->command_name);
+    if (name_len > LINE_BUFF_SIZE - 1) {
+      name_len = LINE_BUFF_SIZE - 1;
+    }
+    memcpy(cmd_buff, cmd_at(last_match)->command_name, name_len);
+    cmd_buff[name_len] = END_OF_LINE;
+    *char_count = name_len;
   }
 
   // print current line with old/updated command
@@ -203,7 +243,7 @@ static int parse_line(char **argv, char *line_buff, int argument_size) {
 
   while (pos <= length) {
     if (line_buff[pos] != '\t' && line_buff[pos] != SPACE &&
-        line_buff[pos] != END_OF_LINE)
+        line_buff[pos] != END_OF_LINE && argc < argument_size)
       argv[argc++] = &line_buff[pos];
 
     for (; line_buff[pos] != '\t' && line_buff[pos] != SPACE &&
@@ -223,9 +263,9 @@ static int parse_line(char **argv, char *line_buff, int argument_size) {
 static void execute(int argc, char **argv) {
   int match_found = FALSE;
 
-  for (int i = 0; table[i].command_name != NULL; i++) {
-    if (strcmp(argv[0], table[i].command_name) == 0) {
-      __cmd_exec_status = table[i].command(argc, &argv[0]);
+  for (int i = 0; cmd_at(i) != NULL; i++) {
+    if (strcmp(argv[0], cmd_at(i)->command_name) == 0) {
+      __cmd_exec_status = cmd_at(i)->command(argc, &argv[0]);
       match_found = TRUE;
       break;
     }
@@ -320,11 +360,13 @@ static void shell(void) {
       }
 #endif //SHELL_NO_TAB_COMPLETE
       else {
-        line_buff[count] = c;
-        count++;
-      }
-      if (__echo && c != DELETE && c != BACK_SPACE) {
-        __write_char__(c);
+        if (count < LINE_BUFF_SIZE - 1) {
+          line_buff[count] = c;
+          count++;
+          if (__echo) {
+            __write_char__(c);
+          }
+        }
       }
     } else {
       loop();
@@ -348,19 +390,27 @@ static void shell(void) {
 }
 
 static void exec_auto_cmds(void) {
-  for (int i = 0; auto_load[i].command_name != NULL; i++) {
-    auto_load[i].command(0, NULL);
+  for (int i = 0; auto_at(i) != NULL; i++) {
+    auto_at(i)->command(0, NULL);
   }
 }
 
 static int build_info(int argc, char **argv) {
+  (void)argc;
+  (void)argv;
   printf("Build: [" SHELL_VERSION ":" USER_REPO_VERSION "] - [" BUILD_USER
          "@" BUILD_HOST "] - " __DATE__ " - " __TIME__ "\n");
   return 0;
 }
 
 
-void __attribute__((optimize("O0"), weak)) initial_setup(void) {
+#if SHELL_SDCC
+void initial_setup(void) {
+  /* SDCC's startup code initializes data/bss and the stack pointer. */
+  platform_init();
+}
+#else
+SHELL_OPTIMIZE_O0 SHELL_WEAK void initial_setup(void) {
   /**
    * Copy the data section from ROM to RAM and
    * zero init the bss section if we are using
@@ -401,12 +451,13 @@ void __attribute__((optimize("O0"), weak)) initial_setup(void) {
    */
   platform_init();
 }
+#endif
 
 /**
  * @brief spwans the prompt
  *
  */
-void prompt() {
+void prompt(void) {
   initial_setup();
   exec_auto_cmds();
   setup();
@@ -432,9 +483,9 @@ int exec(char *cmd_str) {
 }
 
 cmd get_function_addr(char *cmd_str) {
-  for (int i = 0; table[i].command_name != NULL; i++) {
-    if (strcmp(cmd_str, table[i].command_name) == 0) {
-      return table[i].command;
+  for (int i = 0; cmd_at(i) != NULL; i++) {
+    if (strcmp(cmd_str, cmd_at(i)->command_name) == 0) {
+      return cmd_at(i)->command;
     }
   }
   return NULL;
@@ -451,12 +502,12 @@ int help(int argc, char **argv) {
     printf("use: help -l for list only.\n\n");
   }
 
-  while (table[i].command_name != NULL) {
-    printf(table[i].command_name);
+  while (cmd_at(i) != NULL) {
+    printf(cmd_at(i)->command_name);
 
     if (verbose) {
       printf("\n\t");
-      printf(table[i].command_help);
+      printf(cmd_at(i)->command_help);
     }
 
     printf("\n");
@@ -467,6 +518,8 @@ int help(int argc, char **argv) {
 }
 
 int cmd_exec_status(int argc, char **argv) {
+  (void)argc;
+  (void)argv;
   printf("%d\n", __cmd_exec_status);
   return 0;
 }
@@ -477,6 +530,8 @@ ADD_CMD(help, "Prints all available commands", help);
 ADD_CMD(status, "Returns exit status of last executed command",
         cmd_exec_status);
 
+#if !SHELL_SDCC
 // Mandatory!
 __attribute__((section(".cmd_end"))) static volatile cmd_t cmd_end_ = {
     NULL, NULL, NULL};
+#endif

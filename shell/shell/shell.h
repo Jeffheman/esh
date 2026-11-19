@@ -26,6 +26,7 @@ extern "C" {
 #include "a2i.h"
 #include "printf.h"
 #include "regs.h"
+#include "shell_port.h"
 #include "string.h"
 
 /**
@@ -34,6 +35,11 @@ extern "C" {
  * @param cmd_str command string to be executed
  */
 int exec(char *cmd_str);
+
+/**
+ * @brief Initializes the platform and runs the shell forever.
+ */
+void prompt(void);
 
 /**
  * @brief Expected format of the user defined function
@@ -63,8 +69,22 @@ typedef struct {
  * @param _function fucntion that needs to be made available in the shell
  *
  */
+#if SHELL_SDCC
+/**
+ * SDCC puts descriptors in code memory under predictable names. The 8051
+ * build collects them into the shell command tables after compilation.
+ */
+#define SHELL_CMD_ENTRY(_symbol, _name, _help_string, _function) \
+  SHELL_CODE cmd_t _symbol = {#_name, _help_string, &_function}
+
 #define ADD_CMD(_name, _help_string, _function) \
-  __attribute__((section(".cmd_list")))         \
+  SHELL_CMD_ENTRY(_shell_cmd_##_function, _name, _help_string, _function)
+
+#define AUTO_CMD(_name, _help_string, _function) \
+  SHELL_CMD_ENTRY(_shell_auto_##_function, _name, _help_string, _function)
+#else
+#define ADD_CMD(_name, _help_string, _function) \
+  SHELL_SECTION(".cmd_list")                    \
   cmd_t _var##_function = {#_name, _help_string, &_function}
 
 /**
@@ -78,8 +98,9 @@ typedef struct {
  *
  */
 #define AUTO_CMD(_name, _help_string, _function) \
-  __attribute__((section(".auto_list")))         \
+  SHELL_SECTION(".auto_list")                    \
   cmd_t _var##_function = {#_name, _help_string, &_function}
+#endif
 
 /**
  * @brief Looks for and returns address of the function triggered by a command string

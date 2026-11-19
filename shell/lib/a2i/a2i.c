@@ -16,12 +16,31 @@
 
 #include "a2i.h"
 
+#include <limits.h>
+
 int atoi(const char* str) {
+  int sign = 1;
   int res = 0;
-  for (int i = 0; str[i] != '\0'; ++i) {
-    res = res * 10 + str[i] - '0';
+
+  while (*str == ' ' || *str == '\t') {
+    str++;
   }
-  return res;
+  if (*str == '-') {
+    sign = -1;
+    str++;
+  } else if (*str == '+') {
+    str++;
+  }
+
+  for (; *str >= '0' && *str <= '9'; ++str) {
+    int digit = *str - '0';
+    if (res > (INT_MAX - digit) / 10) {
+      return sign < 0 ? INT_MIN : INT_MAX;
+    }
+    res = res * 10 + digit;
+  }
+
+  return sign * res;
 }
 
 uint32_t atoh(const char* str) {

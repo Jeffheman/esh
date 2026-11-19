@@ -64,7 +64,9 @@ extern "C" {
 /**
  * Maximum arguments can be half of line buffer.
  */
+#ifndef MAX_ARG_COUNT
 #define MAX_ARG_COUNT (LINE_BUFF_SIZE / 2)
+#endif
 
 /**
  * Maximum commands to be remembered in the history buffer.

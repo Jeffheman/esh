@@ -35,8 +35,8 @@ typedef enum {
   PARSE_FMT_STR,
 } printf_state;
 
-static char hextable[] = {'0', '1', '2', '3', '4', '5', '6', '7',
-                          '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
+static const char hextable[] = {'0', '1', '2', '3', '4', '5', '6', '7',
+                                '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
 
 static void outstr(const char *str) {
   while (*str != '\0') {
@@ -86,10 +86,15 @@ static bool printf_numbers(const char fmt, va_list *args, int l_count) {
         value = -value;
       }
 
+#ifndef SHELL_NO_PRINTF_LL
+      unsigned long long uvalue = (unsigned long long)value;
+#else
+      unsigned int uvalue = (unsigned int)value;
+#endif
       do {
-        num[num_len++] = hextable[value % 10];
-        value = value / 10;
-      } while (value > 0);
+        num[num_len++] = hextable[uvalue % 10];
+        uvalue = uvalue / 10;
+      } while (uvalue > 0);
 
       while (num_len > 0) {
         __write_char__(num[--num_len]);

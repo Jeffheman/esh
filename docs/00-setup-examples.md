@@ -36,6 +36,8 @@ sudo apt install -y binutils \
                     gcc-riscv64-linux-gnu \
                     openocd \
                     minicom \
+                    sdcc \
+                    sdcc-ucsim \
                     python3-pip
 ```
 This would allow compiling, running, uploading and debugging the code.
