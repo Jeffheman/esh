@@ -168,17 +168,55 @@ user-prefix layout described above.
 
 GCC builds place `ADD_CMD` descriptors in `.cmd_list` and `.auto_list`
 sections, and the linker symbols delimit the tables. SDCC supports neither
-custom sections nor weak symbols, so this example uses a different mechanism:
+custom sections nor weak symbols, so the descriptors cannot be collected at
+link time. `tools/gen_shell_cmd_table.sh` replaces that mechanism by finding
+the descriptors **after compilation**, by symbol name, and emitting an
+explicit table.
 
-1. `ADD_CMD`/`AUTO_CMD` emit a `__code` descriptor named `_shell_cmd_<fn>` or
-   `_shell_auto_<fn>` (see `shell/shell/shell_port.h` and `shell.h`).
-2. `tools/gen_shell_cmd_table.sh` scans the compiled `.rel` files with `sdnm`
-   and writes `objects/shell_cmd_table.c`.
-3. That file defines `shell_cmd_table[]` and `shell_auto_table[]` in code
-   memory, terminated by `0`.
+`make` runs the generator once every source has been compiled, passing all
+application and shell objects:
+
+```sh
+SDNM=sdnm tools/gen_shell_cmd_table.sh objects/*.rel > objects/shell_cmd_table.c
+```
+
+The script then:
+
+1. Lists symbols in every `.rel` file with `sdnm`, discards undefined entries
+   (`U`) and sorts the remaining names.
+2. Matches `__shell_cmd_*` and `__shell_auto_*`. SDCC prefixes C identifiers
+   with an underscore, so the descriptor `_shell_cmd_hello` appears as
+   `__shell_cmd_hello`; one underscore is stripped to recover the C name.
+3. Writes `objects/shell_cmd_table.c` with one `extern` per descriptor and two
+   zero-terminated pointer tables, for example:
+
+```c
+extern SHELL_CODE cmd_t _shell_cmd_hello;
+
+SHELL_CODE cmd_t *const shell_cmd_table[] = {
+  &_shell_cmd_hello,
+  /* ... */
+  0
+};
+```
+
+The generated file is compiled and linked with the other objects. The shell
+core walks the tables through `cmd_at()`/`auto_at()`, so `help`, command
+dispatch, tab completion and the startup `AUTO_CMD`s all read the same data.
+
+Consequences worth knowing:
+
+- Registration is automatic: add `ADD_CMD`/`AUTO_CMD` and rebuild; there is no
+  hand-maintained list.
+- Entries are ordered by symbol name, not source order, so `help` prints them
+  in that order.
+- The script requires at least one `_shell_cmd_*` and one `_shell_auto_*`
+  symbol and fails otherwise; `version` in `shell.c` provides the AUTO entry.
+- `objects/shell_cmd_table.c` is generated: do not edit it, and `make clean`
+  deletes it. Set `SDNM` if `sdnm` is not on `PATH`.
 
 Command descriptors and lookup tables live in flash, so they do not consume
-internal RAM. The shell core accesses them through `cmd_at()`/`auto_at()`.
+internal RAM.
 
 To add a command, define the function and use the same macros as other
 examples:
