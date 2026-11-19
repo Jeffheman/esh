@@ -95,6 +95,75 @@ Build: [...:...] - [...@...] - ...
 6
 ```
 
+## Simulating with ucsim
+
+`sdcc-ucsim` ships `ucsim_51`, an MCS-51 simulator that loads the same Intel
+HEX image. With the image built:
+
+```sh
+ucsim_51 -t C52 -g -U 0 esh8051.ihx
+```
+
+- `-t C52` selects an 8052-class CPU with 256 bytes of internal RAM. Use it
+  even for an 8051 build: `-t 51` only provides 128 bytes and `%d` overflows
+  the stack at runtime.
+- `-g` starts execution after loading the image.
+- `-U 0` connects UART0 to stdin/stdout, so the shell prompt is usable
+  directly. Press `^x` to reach the simulator control menu.
+- The default crystal is 11.0592 MHz, matching the example; override it with
+  `-X 12000000` if you built for another clock.
+
+To stop a run started with `-g`, use `^x` from the UART display or run the
+simulator under `timeout`. Command sequences can be scripted by piping them
+in:
+
+```sh
+printf 'hello\rsum 1 2 3\r' | timeout 4 ucsim_51 -t C52 -g -U 0 -q esh8051.ihx
+```
+
+### Serial over TCP
+
+File input is consumed as soon as the simulation starts, which is a poor fit
+for an interactive shell. For scripted or remote tests, expose the UART on a
+TCP port and run the command console on another:
+
+```sh
+ucsim_51 -t C52 -g -S 'uart=0,port=5679' -Z 5680 esh8051.ihx
+```
+
+Connect with `nc localhost 5679` (or `telnet`) to talk to the shell, and
+`telnet localhost 5680` for the simulator console. You can also redirect the
+UART to files with `-S 'uart=0,in=input.bin,out=output.bin'`.
+
+### Simulator console
+
+Without `-g` the CPU stays halted, so breakpoints can be set before running:
+
+| Command | Effect |
+| :-- | :-- |
+| `run [start [stop]]`, `stop` | Start or stop execution |
+| `step [n]`, `next` | Step one or more instructions |
+| `break 0x0100`, `break x r 0x8000` | Code or memory access breakpoint |
+| `clear`, `delete`, `info breakpoints` | Manage breakpoints |
+| `state`, `pc [addr]` | CPU state and program counter |
+| `di 0 0xff`, `dx 0 0xff`, `ds 0x80 0xff` | Dump IRAM, XRAM and SFRs |
+| `dc 0 20`, `disassemble` | Disassemble code memory |
+| `reset`, `file "x.hex"`, `check "x.hex"` | Reset, load or verify an image |
+| `exec "cmdfile"`, `quit`, `kill` | Run a command script, close console, exit |
+
+Commands passed with `-e` run at startup; `-G` starts the simulation and quits
+when the CPU stops, which makes batch debug sessions possible:
+
+```sh
+ucsim_51 -t C52 -G -e 'break 0x0000' esh8051.ihx
+```
+
+Other useful startup options are `-X freq[k|M]` for the crystal, `-a nr` for
+the variable space size, `-w` to make flash writable and `-q` for quiet
+output. `-H` lists the supported CPU types. The full simulator manual is
+installed as `~/.local/opt/sdcc/usr/share/doc/sdcc-ucsim/index.html` in the
+user-prefix layout described above.
+
 ## How commands are registered
 
 GCC builds place `ADD_CMD` descriptors in `.cmd_list` and `.auto_list`

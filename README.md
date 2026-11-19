@@ -13,6 +13,7 @@
 this is a perfect tool for getting up and running with a new board in less than 1 hour.
 
 ### Features:
+
 - Low footprint shell implementation.
 - Commands with same foot print as `int main(int argc, char* argv[]){}`
 - Export function as command using a macro (`ADD_CMD()` available in `shell.h`).
