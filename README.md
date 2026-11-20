@@ -46,16 +46,33 @@ with external XDATA RAM and the LARGE memory model.
 
 For a native µVision project, open
 [`examples/emulation/8051-keil/esh-8051.uvproj`](examples/emulation/8051-keil/esh-8051.uvproj),
-select `Simulator`, and press F7 to build. No Python or Make is required. The image,
-HEX and map are written to `examples/emulation/8051-keil/build/uvision/`.
+select `Simulator`, and press F7 to build. Python 3.9+ must be available as `python`
+on µVision's PATH; Make is not required. Restart µVision after changing PATH.
+The image, HEX and map are written to `examples/emulation/8051-keil/build/uvision/`.
 Use Ctrl+F5 to enter the simulator, open `View > Serial Windows > UART #1`, then
 press F5 to run. The simulator maps 64KB of XDATA; a physical board needs suitable
 external RAM or a board-specific startup and memory layout.
 
-The native project defines `ESH_UVISION_COMMANDS` and uses `commands_uv.c` for its
-command tables. When adding or removing `ADD_CMD`/`AUTO_CMD` registrations, update
-that file too; automatic commands belong in both tables. The Python/Make backend
-still generates its tables automatically and excludes these native tables.
+The native project defines `ESH_UVISION_COMMANDS`. Its **Before Build** command
+runs `build.py --uvision-project "#P" --uvision-output "#L" --keil-root "$K."` to
+scan the enabled C sources with C51 and generate `build/uvision/commands.inc`.
+`commands_uv.c` includes that generated table; do not maintain a second command
+list or edit the generated file. Add new C files to the µVision target as usual,
+then use `ADD_CMD`/`AUTO_CMD` and press F7. Target/group/file definitions, undefines,
+include paths and source exclusions are respected. The table is replaced only
+when its contents change, so unchanged builds do not recompile its wrapper.
+
+Keep the pre-build step enabled with **Stop on Exit Code >= 1**. A failed scan
+(including compiler warnings, since C51 treats missing headers as warnings)
+invalidates the old table and stops the build. Scan response files and preprocessed
+sources remain in `build/uvision/command-scan/` for diagnosis. µVision can return
+exit code zero after stopping on a failed user command: automation must also check
+its build log, or run the Python generation command first and require its success.
+The hook identifies the active target using µVision's linker-output path (`#L`).
+Give each target a distinct output path; ambiguous targets stop generation instead
+of silently using another target's settings. For generation outside µVision, pass
+`--target "Simulator"` instead of `--uvision-output`.
+The Python/Make backend retains its own automatic table generation.
 Native build user/host are `uVision`; Git revisions are `unknown` unless overridden
 in the target's C51 definitions. A licensed C51 toolchain is required for the full image.
 
@@ -99,6 +116,12 @@ Integration details:
 - C51 uses `DEBUG OBJECTEXTEND` so the debugger knows the widths of variables.
   Without extended type information, the debugger can read only one byte of a
   multi-byte test result; the simulator runner rejects such images.
+- C51 is compiled with `WARNINGLEVEL(1)`. Keil C51 has no per-warning-number
+  switch, and level 2 emits `C280` for the unused `argc`/`argv` of command
+  callbacks. Level 1 suppresses `C280` while still reporting missing includes
+  (`C318`), macro redefinition (`C317`), missing return values (`C290`) and
+  errors, so the native pre-build scan and Python/Make builds stay warning-
+  clean without hiding the diagnostics that could omit commands or break a build.
 - BL51 `NOOVERLAY` is required because command/UART callbacks are indirect.
   Unresolved external symbols (`L1`/`L2`) stop the build before HEX conversion,
   even though BL51 reports them as warnings and produces an absolute image.

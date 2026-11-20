@@ -151,34 +151,383 @@ class UvisionProjectTests(unittest.TestCase):
         self.assertEqual(options.findtext("Target51/Target51Misc/MemoryModel"), "2")
         self.assertEqual(options.findtext("Target51/C51/ObjectExtend"), "1")
         self.assertEqual(options.findtext("Target51/C51/IntegerPromotion"), "1")
+        self.assertEqual(options.findtext("Target51/C51/WarningLevel"), "1")
         self.assertIn("NOOVERLAY", options.findtext("Target51/Lx51/MiscControls"))
         self.assertEqual(options.findtext("Target51/Lx51/XDataBaseAddress"), "0x0000-0xEFFF")
         self.assertEqual(options.findtext("TargetCommonOption/CreateHexFile"), "1")
         self.assertEqual(options.findtext("DebugOption/Simulator/UseSimulator"), "1")
-        for hook in ("BeforeCompile", "BeforeMake", "AfterMake"):
+        for hook in ("BeforeCompile", "AfterMake"):
             for step in ("RunUserProg1", "RunUserProg2"):
                 self.assertEqual(options.findtext(f"TargetCommonOption/{hook}/{step}"), "0")
+        hook = options.find("TargetCommonOption/BeforeMake")
+        self.assertEqual(hook.findtext("RunUserProg1"), "1")
+        self.assertEqual(hook.findtext("RunUserProg2"), "0")
+        self.assertEqual(hook.findtext("nStopB1X"), "2")
+        self.assertIn('--uvision-project "#P"', hook.findtext("UserProg1Name"))
+        self.assertIn('--uvision-output "#L"', hook.findtext("UserProg1Name"))
+        self.assertIn('--keil-root "$K."', hook.findtext("UserProg1Name"))
+
+    def copy_project(self, directory):
+        directory = Path(directory)
+        document = ET.parse(self.project / "esh-8051.uvproj")
+        target = document.find("./Targets/Target")
+        for entry in target.findall("./Groups/Group/Files/File"):
+            source = (self.project / entry.findtext("FilePath").replace("\\", "/")).resolve()
+            if source.parent == self.project:
+                shutil.copy2(source, directory / source.name)
+                entry.find("FilePath").text = source.name
+            else:
+                entry.find("FilePath").text = str(source)
+        includes = target.find("TargetOption/Target51/C51/VariousControls/IncludePath")
+        includes.text = ";".join(str((self.project / value.replace("\\", "/")).resolve())
+                                 for value in includes.text.split(";"))
+        hook = target.find("TargetOption/TargetCommonOption/BeforeMake/UserProg1Name")
+        hook.text = (f'"{sys.executable}" "{ROOT / "shell/toolchains/keil-c51/build.py"}" '
+                     '--uvision-project "#P" --uvision-output "#L" --keil-root "$K."')
+        path = directory / "test.uvproj"
+        document.write(path, encoding="utf-8", xml_declaration=True)
+        return path
+
+    def generate(self, project, target="Simulator", success=True, keil=None):
+        command = [sys.executable, str(ROOT / "shell/toolchains/keil-c51/build.py"),
+                   "--keil-root", keil or os.environ["KEIL_C51_ROOT"],
+                   "--uvision-project", str(project), "--target", target]
+        result = subprocess.run(command, capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 0 if success else 2, result.stdout + result.stderr)
+        return result.stdout + result.stderr
 
     @unittest.skipUnless(os.environ.get("KEIL_C51_ROOT"), "Set KEIL_C51_ROOT to verify native command tables")
     def test_native_tables_match_automatic_registration(self):
         definitions = self.target.findtext("TargetOption/Target51/C51/VariousControls/Define").split(",")
         for feature in (None, "SHELL_NO_HISTORY", "SHELL_NO_UTILS", "SHELL_NO_BIT_UTILS"):
-            with self.subTest(feature=feature), tempfile.TemporaryDirectory(prefix="esh-uvision-table-") as temp:
+            with self.subTest(feature=feature), tempfile.TemporaryDirectory(prefix="esh uvision table ") as temp:
+                project = self.copy_project(temp)
+                document = ET.parse(project)
+                if feature:
+                    element = document.find("./Targets/Target/TargetOption/Target51/C51/VariousControls/Define")
+                    element.text += "," + feature
+                document.write(project, encoding="utf-8", xml_declaration=True)
+                self.assertNotIn("*** WARNING", self.generate(project))
+                output = Path(temp) / "build/python"
                 command = [sys.executable, str(ROOT / "shell/toolchains/keil-c51/build.py"),
                            "--keil-root", os.environ["KEIL_C51_ROOT"], "--project-dir", str(self.project),
-                           "--output-dir", temp, "--compile-only"]
+                           "--output-dir", str(output), "--compile-only"]
                 for definition in definitions + ([feature] if feature else []):
-                    command.extend(["--define", definition])
+                    if definition != "ESH_UVISION_COMMANDS":
+                        command.extend(["--define", definition])
                 result = subprocess.run(command, capture_output=True, text=True, timeout=60)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertNotIn("*** WARNING", result.stdout + result.stderr)
-                native = next(Path(temp).glob("*_commands_uv.i")).read_text(errors="replace")
-                generated = (Path(temp) / "commands.c").read_text()
-                for table in ("esh_commands", "esh_auto_commands"):
-                    pattern = rf"\b{table}\s*\[\]\s*=\s*\{{([^}}]+)\}}"
-                    native_body = re.search(pattern, native).group(1)
-                    generated_body = re.search(pattern, generated).group(1)
-                    self.assertEqual(re.findall(r"&\w+", native_body), re.findall(r"&\w+", generated_body))
+                native = (Path(temp) / "build/uvision/commands.inc").read_text()
+                generated = (output / "commands.c").read_text()
+                self.assertEqual(native, "#define ESH_COMMAND_TABLE_READY 1\n" + generated)
+
+    def test_environment_include_paths_are_expanded(self):
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            with patch.dict(os.environ, {"ProgramFiles(x86)": temp}):
+                self.assertEqual(BUILD.uvision_path('{ProgramFiles(x86)}/headers', project), project / "headers")
+            with patch.dict(os.environ, {}, clear=True), self.assertRaisesRegex(ValueError, "Undefined uVision"):
+                BUILD.uvision_path("{MISSING}/headers", project)
+
+    def test_included_files_override_group_exclusion(self):
+        for group_value, file_value, included in (("2", "2", True), ("0", "2", False),
+                                                   ("1", "2", True), ("2", "0", False), ("0", "1", True)):
+            with self.subTest(group=group_value, file=file_value), tempfile.TemporaryDirectory() as temp:
+                project = self.copy_project(temp)
+                document = ET.parse(project)
+                group = document.find("./Targets/Target/Groups/Group")
+                common = ET.SubElement(ET.SubElement(group, "GroupOption"), "CommonProperty")
+                ET.SubElement(common, "IncludeInBuild").text = group_value
+                entry = group.find("Files/File")
+                common = ET.SubElement(ET.SubElement(entry, "FileOption"), "CommonProperty")
+                ET.SubElement(common, "IncludeInBuild").text = file_value
+                document.write(project, encoding="utf-8", xml_declaration=True)
+                sources = BUILD.uvision_sources(project, "Simulator", Path(temp))
+                self.assertEqual(Path(temp) / "hello.c" in [source for source, _ in sources], included)
+
+    def test_defines_undefines_and_include_order_match_uvision(self):
+        with tempfile.TemporaryDirectory() as temp:
+            project = self.copy_project(temp)
+            document = ET.parse(project)
+            target = document.find("./Targets/Target")
+            compiler = target.find("TargetOption/Target51/C51")
+            controls = compiler.find("VariousControls")
+            controls.find("Define").text = 'T_ONLY=11,SHARED=10,DROP_T=1,MSG="two words, a comma"'
+            controls.find("Undefine").text = "T_ONLY"
+            controls.find("IncludePath").text = "t1;t2"
+            group = target.find("Groups/Group")
+            group_compiler = ET.SubElement(ET.SubElement(ET.SubElement(group, "GroupOption"), "Group51"), "C51")
+            ET.SubElement(group_compiler, "IntegerPromotion").text = "0"
+            group_controls = ET.SubElement(group_compiler, "VariousControls")
+            ET.SubElement(group_controls, "Define").text = "G_ONLY=22,SHARED=20,DROP_G=1"
+            ET.SubElement(group_controls, "Undefine").text = "SHARED"
+            ET.SubElement(group_controls, "IncludePath").text = "g1;g2"
+            entry = group.find("Files/File")
+            file_compiler = ET.SubElement(ET.SubElement(ET.SubElement(entry, "FileOption"), "File51"), "C51")
+            ET.SubElement(file_compiler, "IntegerPromotion").text = "2"
+            file_controls = ET.SubElement(file_compiler, "VariousControls")
+            ET.SubElement(file_controls, "Define").text = "F_ONLY=33,SHARED=30"
+            ET.SubElement(file_controls, "Undefine").text = "DROP_T,DROP_G,SHARED,SHARED"
+            ET.SubElement(file_controls, "IncludePath").text = "f1;f2"
+            document.write(project, encoding="utf-8", xml_declaration=True)
+            sources = BUILD.uvision_sources(project, "Simulator", Path(temp))
+            arguments = next(controls for source, controls in sources if source.name == "hello.c")
+            self.assertIn('DEFINE(T_ONLY=11,MSG="two words, a comma",G_ONLY=22,SHARED=20,F_ONLY=33,SHARED=30,ESH_COMMAND_SCAN)', arguments)
+            paths = [Path(temp) / part for part in ("f1", "f2", "g1", "g2", "t1", "t2", "INC")]
+            self.assertIn("INCDIR(" + ";".join(map(str, paths)) + ")", arguments)
+            self.assertIn("NOINTPROMOTE", arguments)
+
+    @unittest.skipUnless(os.environ.get("KEIL_C51_ROOT"), "Set KEIL_C51_ROOT to verify scoped compiler settings")
+    def test_scoped_macros_and_headers_use_real_c51(self):
+        with tempfile.TemporaryDirectory(prefix="esh uvision scopes ") as temp:
+            project = self.copy_project(temp)
+            document = ET.parse(project)
+            target = document.find("./Targets/Target")
+            group = target.find("Groups/Group")
+            file = group.find("Files/File")
+            levels = [target.find("TargetOption/Target51/C51/VariousControls")]
+            for parent, option, compiler in ((group, "GroupOption", "Group51"), (file, "FileOption", "File51")):
+                node = ET.SubElement(ET.SubElement(ET.SubElement(parent, option), compiler), "C51")
+                levels.append(ET.SubElement(node, "VariousControls"))
+            for index, controls in enumerate(levels):
+                directory = Path(temp) / f"headers {index}"
+                directory.mkdir()
+                (directory / "scope.h").write_text(f"#define HEADER_LEVEL {index}\n")
+                includes = controls.find("IncludePath")
+                if includes is None:
+                    includes = ET.SubElement(controls, "IncludePath")
+                includes.text = str(directory) + (";" + includes.text if includes.text else "")
+                defines = controls.find("Define")
+                if defines is None:
+                    defines = ET.SubElement(controls, "Define")
+                defines.text = (defines.text + "," if defines.text else "") + f"LEVEL_{index},DROP_{index}"
+                misc = controls.find("MiscControls")
+                if misc is None:
+                    misc = ET.SubElement(controls, "MiscControls")
+                misc.text = f"DEFINE(MISC_{index})"
+            ET.SubElement(levels[2], "Undefine").text = "DROP_0,DROP_1"
+            document.write(project, encoding="utf-8", xml_declaration=True)
+            source = Path(temp) / "hello.c"
+            source.write_text(source.read_text() + '\n#include <scope.h>\n'
+                              '#if HEADER_LEVEL != 2 || !defined(LEVEL_0) || !defined(LEVEL_1) || !defined(LEVEL_2)\n'
+                              '#error scoped options differ\n#endif\n'
+                              '#if !defined(MISC_0) || !defined(MISC_1) || !defined(MISC_2)\n'
+                              '#error scoped misc controls differ\n#endif\n'
+                              '#if defined(DROP_0) || defined(DROP_1) || !defined(DROP_2)\n'
+                              '#error scoped undefines differ\n#endif\n')
+            self.generate(project)
+            self.assertIn("&esh_cmd_hello,", (Path(temp) / "build/uvision/commands.inc").read_text())
+
+    @unittest.skipUnless(os.environ.get("KEIL_C51_ROOT"), "Set KEIL_C51_ROOT to verify command discovery")
+    def test_added_removed_and_conditional_commands(self):
+        with tempfile.TemporaryDirectory(prefix="esh uvision commands ") as temp:
+            project = self.copy_project(temp)
+            source = Path(temp) / "hello.c"
+            original = source.read_text()
+            (Path(temp) / "commands.h").write_text(
+                '#ifdef EXTRA_COMMAND\n'
+                'static int extra(int argc, char **argv) { argc = argc; argv = argv; return 0; }\n'
+                'ADD_CMD(extra, "extra", extra);\n'
+                'AUTO_CMD(extra, "extra", extra);\n'
+                '#endif\n', encoding="ascii")
+            source.write_text(original + '\n#include "commands.h"\n', encoding="ascii")
+            self.generate(project)
+            table = Path(temp) / "build/uvision/commands.inc"
+            self.assertNotIn("esh_cmd_extra", table.read_text())
+            document = ET.parse(project)
+            alternative = ET.fromstring(ET.tostring(document.find("./Targets/Target")))
+            alternative.find("TargetName").text = "With extra commands"
+            alternative.find("TargetOption/Target51/C51/VariousControls/Define").text += ",EXTRA_COMMAND"
+            document.find("Targets").append(alternative)
+            document.write(project, encoding="utf-8", xml_declaration=True)
+            self.generate(project, target="With extra commands")
+            self.assertIn("&esh_cmd_extra,", table.read_text())
+            self.assertEqual(table.read_text().count("&esh_auto_extra,"), 2)
+            timestamp = table.stat().st_mtime_ns
+            self.generate(project, target="With extra commands")
+            self.assertEqual(table.stat().st_mtime_ns, timestamp)
+            source.write_text(original, encoding="ascii")
+            self.generate(project, target="With extra commands")
+            self.assertNotIn("esh_cmd_extra", table.read_text())
+            self.assertNotIn("esh_auto_extra", table.read_text())
+            extra_source = Path(temp) / "new_commands.c"
+            extra_source.write_text('#include "shell.h"\n#include "commands.h"\n')
+            entries = alternative.find("Groups/Group/Files")
+            entry = ET.SubElement(entries, "File")
+            ET.SubElement(entry, "FileName").text = extra_source.name
+            ET.SubElement(entry, "FileType").text = "1"
+            ET.SubElement(entry, "FilePath").text = extra_source.name
+            document.write(project, encoding="utf-8", xml_declaration=True)
+            self.generate(project, target="With extra commands")
+            self.assertIn("&esh_cmd_extra,", table.read_text())
+            self.assertEqual(table.read_text().count("&esh_auto_extra,"), 2)
+            entries.remove(entry)
+            document.write(project, encoding="utf-8", xml_declaration=True)
+            self.generate(project, target="With extra commands")
+            self.assertNotIn("esh_cmd_extra", table.read_text())
+            self.assertNotIn("esh_auto_extra", table.read_text())
+
+    @unittest.skipUnless(os.environ.get("KEIL_C51_ROOT"), "Set KEIL_C51_ROOT to verify C280 suppression")
+    def test_unused_callback_parameters_do_not_abort_scan(self):
+        with tempfile.TemporaryDirectory(prefix="esh uvision c280 ") as temp:
+            project = self.copy_project(temp)
+            source = Path(temp) / "hello.c"
+            original = source.read_text()
+            source.write_text(original + '\nstatic int unused(int argc, char **argv) { return 0; }\n'
+                              'ADD_CMD(unused, "unused parameters", unused);\n')
+            diagnostic = self.generate(project)
+            self.assertNotIn("C280", diagnostic)
+            self.assertIn("&esh_cmd_unused,", (Path(temp) / "build/uvision/commands.inc").read_text())
+
+    @unittest.skipUnless(os.environ.get("KEIL_C51_ROOT"), "Set KEIL_C51_ROOT to verify scan failure handling")
+    def test_scan_failures_invalidate_previous_tables(self):
+        for failure in ("compiler", "target", "xml", "missing-header", "compile", "duplicate"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory(prefix="esh uvision failure ") as temp:
+                project = self.copy_project(temp)
+                self.generate(project)
+                table = Path(temp) / "build/uvision/commands.inc"
+                self.assertTrue(table.is_file())
+                options = {}
+                if failure == "compiler":
+                    options["keil"] = temp
+                elif failure == "target":
+                    options["target"] = "nonexistent"
+                elif failure == "xml":
+                    project.write_text("<Project>")
+                elif failure == "duplicate":
+                    source = Path(temp) / "duplicate.c"
+                    source.write_text('#include "shell.h"\n'
+                                      'static int hello(int argc, char **argv) { argc = argc; argv = argv; return 0; }\n'
+                                      'ADD_CMD(duplicate, "duplicate", hello);\n')
+                    document = ET.parse(project)
+                    entry = ET.SubElement(document.find("./Targets/Target/Groups/Group/Files"), "File")
+                    ET.SubElement(entry, "FileName").text = source.name
+                    ET.SubElement(entry, "FileType").text = "1"
+                    ET.SubElement(entry, "FilePath").text = source.name
+                    document.write(project, encoding="utf-8", xml_declaration=True)
+                else:
+                    source = Path(temp) / "hello.c"
+                    extra = {'missing-header': '#include "nonexistent.h"', 'compile': '#error scan must stop'}[failure]
+                    source.write_text(source.read_text() + "\n" + extra + "\n")
+                diagnostic = self.generate(project, success=False, **options)
+                if failure == "duplicate":
+                    self.assertIn("Duplicate command descriptor", diagnostic)
+                self.assertFalse(table.exists())
+
+    @unittest.skipUnless(os.environ.get("KEIL_C51_ROOT"), "Set KEIL_C51_ROOT to test native uVision builds")
+    def test_native_hook_incremental_rebuild_and_failure_stop(self):
+        keil = Path(os.environ["KEIL_C51_ROOT"])
+        if keil.name.lower() == "c51":
+            keil = keil.parent
+        uvision = keil / "UV4/UV4.exe"
+        if not uvision.is_file():
+            self.skipTest("uVision is not installed")
+        with tempfile.TemporaryDirectory(prefix="esh uvision build ") as temp:
+            project = self.copy_project(temp)
+            output = Path(temp) / "build/uvision"
+            output.mkdir(parents=True)
+            log = Path(temp) / "build/build.log"
+
+            current_image = output / "esh-8051.hex"
+            previous_image_time = None
+
+            def build(target_name="Simulator", destination=output):
+                nonlocal current_image, previous_image_time
+                current_image = destination / "esh-8051.hex"
+                previous_image_time = current_image.stat().st_mtime_ns if current_image.exists() else None
+                log.unlink(missing_ok=True)
+                result = subprocess.run([str(uvision), "-b", str(project), "-t", target_name,
+                                         "-j0", "-o", str(log)], timeout=90)
+                return result.returncode, log.read_text(errors="replace")
+
+            def compiled(code, diagnostic):
+                self.assertIn("Generated uVision commands", diagnostic)
+                self.assertNotIn("*** WARNING", diagnostic)
+                self.assertNotIn("error C", diagnostic)
+                if code:
+                    self.assertIn("FATAL ERROR L250: CODE SIZE LIMIT", diagnostic)
+                    self.assertEqual(diagnostic.count("FATAL ERROR"), 1, diagnostic)
+                    self.assertEqual(code, 3, diagnostic)
+                else:
+                    self.assertNotIn("Target not created", diagnostic)
+                    self.assertNotIn("FATAL ERROR", diagnostic)
+                    self.assertIn("0 Error(s)", diagnostic)
+                    self.assertTrue(current_image.is_file())
+                    if "linking..." in diagnostic:
+                        self.assertNotEqual(current_image.stat().st_mtime_ns, previous_image_time)
+
+            compiled(*build())
+            table = output / "commands.inc"
+            original_time = table.stat().st_mtime_ns
+            code, diagnostic = build()
+            compiled(code, diagnostic)
+            self.assertEqual(table.stat().st_mtime_ns, original_time)
+            self.assertNotIn("compiling commands_uv.c", diagnostic)
+            source = Path(temp) / "hello.c"
+            original = source.read_text()
+            source.write_text(original + '\nstatic int new_command(int argc, char **argv) { '
+                              'argc = argc; argv = argv; return 0; }\n'
+                              'ADD_CMD(new_command, "new", new_command);\n'
+                              'AUTO_CMD(new_command, "new", new_command);\n')
+            code, diagnostic = build()
+            compiled(code, diagnostic)
+            self.assertIn("compiling commands_uv.c", diagnostic)
+            self.assertIn("&esh_cmd_new_command,", table.read_text())
+            self.assertEqual(table.read_text().count("&esh_auto_new_command,"), 2)
+            symbols = (output / "commands_uv.obj").read_bytes().upper()
+            self.assertIn(b"ESH_CMD_NEW_COMMAND", symbols)
+            self.assertIn(b"ESH_AUTO_NEW_COMMAND", symbols)
+            source.write_text(original)
+            code, diagnostic = build()
+            compiled(code, diagnostic)
+            self.assertIn("compiling commands_uv.c", diagnostic)
+            self.assertNotIn("esh_cmd_new_command", table.read_text())
+            source.write_text(original + '\n#include "nonexistent-command-header.h"\n')
+            _, diagnostic = build()
+            self.assertIn("Target not created", diagnostic)
+            self.assertIn("Command scan failed", diagnostic)
+            self.assertNotIn("compiling ", diagnostic)
+            self.assertNotIn("linking...", diagnostic)
+            self.assertFalse(table.exists())
+            source.write_text(original)
+            compiled(*build())
+            document = ET.parse(project)
+            hook = document.find("./Targets/Target/TargetOption/TargetCommonOption/BeforeMake/UserProg1Name")
+            working_hook = hook.text
+            hook.text = 'esh-missing-python-executable ' + hook.text.split('" ', 1)[1]
+            document.write(project, encoding="utf-8", xml_declaration=True)
+            _, diagnostic = build()
+            self.assertIn("Target not created", diagnostic)
+            self.assertNotIn("Generated uVision commands", diagnostic)
+            self.assertNotIn("compiling ", diagnostic)
+            self.assertNotIn("linking...", diagnostic)
+            self.assertTrue(table.is_file())
+            hook.text = working_hook
+            alternative = ET.fromstring(ET.tostring(document.find("./Targets/Target")))
+            alternative.find("TargetName").text = "Additional target"
+            document.find("Targets").append(alternative)
+            document.write(project, encoding="utf-8", xml_declaration=True)
+            _, diagnostic = build(target_name="Additional target")
+            self.assertIn("use distinct target output paths", diagnostic)
+            self.assertIn("Target not created", diagnostic)
+            self.assertNotIn("compiling ", diagnostic)
+            self.assertNotIn("linking...", diagnostic)
+            self.assertFalse(table.exists())
+            additional_output = Path(temp) / "build/additional"
+            additional_output.mkdir()
+            alternative.find("TargetOption/TargetCommonOption/OutputDirectory").text = str(additional_output) + "\\"
+            alternative.find("TargetOption/TargetCommonOption/ListingPath").text = str(additional_output) + "\\"
+            alternative.find("TargetOption/Target51/C51/VariousControls/Define").text += ",TARGET_ONLY"
+            document.write(project, encoding="utf-8", xml_declaration=True)
+            source.write_text(original + '\n#ifdef TARGET_ONLY\n'
+                              'static int target_only(int argc, char **argv) { argc = argc; argv = argv; return 0; }\n'
+                              'ADD_CMD(target_only, "target", target_only);\n#endif\n')
+            compiled(*build(target_name="Additional target", destination=additional_output))
+            self.assertIn("&esh_cmd_target_only,", table.read_text())
+            self.assertIn(b"ESH_CMD_TARGET_ONLY", (additional_output / "commands_uv.obj").read_bytes().upper())
+            compiled(*build())
+            self.assertNotIn("esh_cmd_target_only", table.read_text())
 
 
 class ProjectDiscoveryTests(unittest.TestCase):

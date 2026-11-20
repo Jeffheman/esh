@@ -8,6 +8,8 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
+import xml.etree.ElementTree as ET
 
 
 COMMAND = re.compile(r"\bconst\s+cmd_t\s+code\s+(esh_(?:cmd|auto)_\w+)\s*=")
@@ -41,6 +43,136 @@ def run(tool, arguments, response, env, use_response=True):
         raise RuntimeError(f"{tool.name} failed ({result.returncode}); see {response}")
 
 
+def uvision_path(value, project):
+    def environment(match):
+        name = match.group(1)
+        if name not in os.environ:
+            raise ValueError(f"Undefined uVision environment variable: {name}")
+        return os.environ[name]
+
+    value = re.sub(r"\{([^{}]+)\}", environment, value.strip().strip('"'))
+    if "$" in value or "#" in value:
+        raise ValueError(f"Unsupported uVision path expansion: {value}")
+    return (project / value.replace("\\", "/")).resolve()
+
+
+def uvision_sources(project_file, target_name, keil, target_output=None):
+    project = project_file.parent
+    targets = ET.parse(project_file).findall("./Targets/Target")
+    if target_output is not None:
+        matches = []
+        for entry in targets:
+            common = entry.find("TargetOption/TargetCommonOption")
+            output = uvision_path(common.findtext("OutputDirectory", ""), project) / common.findtext("OutputName", "")
+            if output.resolve() == target_output.resolve():
+                matches.append(entry)
+        if len(matches) != 1:
+            raise ValueError(f"Expected one uVision target for {target_output}; use distinct target output paths")
+        target = matches[0]
+    else:
+        target = next((entry for entry in targets if entry.findtext("TargetName") == target_name), None)
+        if target is None:
+            raise ValueError(f"uVision target not found: {target_name}")
+    options = target.find("TargetOption")
+    if target.findtext("ToolsetNumber") != "0x0" or options.findtext("Target51/Target51Misc/MemoryModel") != "2":
+        raise ValueError("esh command registration requires a C51 LARGE-model target")
+    compiler = options.find("Target51/C51")
+    sources = []
+    for group in target.findall("Groups/Group"):
+        group_included = group.findtext("GroupOption/CommonProperty/IncludeInBuild", "1")
+        for entry in group.findall("Files/File"):
+            included = entry.findtext("FileOption/CommonProperty/IncludeInBuild", "2")
+            if (group_included if included == "2" else included) == "0":
+                continue
+            if entry.findtext("FileType") != "1":
+                continue
+            source = uvision_path(entry.findtext("FilePath", ""), project)
+            if source.suffix.lower() != ".c" or not source.is_file():
+                raise ValueError(f"C51 requires an existing C source: {source}")
+            layers = [node for node in (compiler, group.find("GroupOption/Group51/C51"),
+                                         entry.find("FileOption/File51/C51")) if node is not None]
+            definitions = []
+            suppressed = set()
+            includes = []
+            promotion = "1"
+            for level, layer in enumerate(layers):
+                values = layer.findtext("VariousControls/Define", "")
+                definitions.extend(re.findall(r'''(?:[^,\s"']+|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')+''', values))
+                if level:
+                    for name in re.split(r"[,\s]+", layer.findtext("VariousControls/Undefine", "").strip()):
+                        # uVision suppresses the first matching record, including an already suppressed one.
+                        index = next((i for i, value in enumerate(definitions) if value.partition("=")[0] == name), None)
+                        if index is not None:
+                            suppressed.add(index)
+                paths = layer.findtext("VariousControls/IncludePath", "")
+                includes = [uvision_path(value, project) for value in paths.split(";") if value.strip()] + includes
+                if layer.findtext("IntegerPromotion") in ("0", "1"):
+                    promotion = layer.findtext("IntegerPromotion")
+            definitions = [value for index, value in enumerate(definitions) if index not in suppressed]
+            controls = ["LARGE", "OBJECTEXTEND", "INCDIR(" + ";".join(map(str, includes + [keil / "INC"])) + ")",
+                        "NOINTPROMOTE" if promotion == "0" else "INTPROMOTE",
+                        "DEFINE(" + ",".join(definitions + ["ESH_COMMAND_SCAN"]) + ")"]
+            warning = compiler.findtext("WarningLevel", "2")
+            if warning in ("0", "1", "2", "3"):
+                controls.append(f"WARNINGLEVEL({warning})")
+            for layer in layers:
+                misc = layer.findtext("VariousControls/MiscControls", "").strip()
+                if misc:
+                    controls.append(misc)
+            sources.append((source, controls))
+    if not sources:
+        raise ValueError("No enabled C sources in uVision target")
+    root = Path(__file__).resolve().parents[2]
+    # Keep core/library registrations ahead of application commands, as in the Python backend.
+    order = {path: index for index, path in enumerate([root / "shell/shell.c", *sorted((root / "lib").rglob("*.c"))])}
+    return sorted(sources, key=lambda item: order.get(item[0], len(order)))
+
+
+def generate_uvision_commands(project_file, target_name, keil_root, target_output=None):
+    project_file = project_file.resolve()
+    table = project_file.parent / "build/uvision/commands.inc"
+    try:
+        if not keil_root:
+            raise ValueError("Pass --keil-root for the uVision C51 toolchain")
+        keil = keil_root.resolve()
+        if (keil / "C51/BIN/C51.exe").is_file():
+            keil /= "C51"
+        compiler = keil / "BIN/C51.exe"
+        if not compiler.is_file():
+            raise ValueError(f"Tool not found: {compiler}")
+        sources = uvision_sources(project_file, target_name, keil, target_output)
+        output = table.parent / "command-scan"
+        output.mkdir(parents=True, exist_ok=True)
+        env = os.environ.copy()
+        env["C51INC"] = str(keil / "INC")
+        preprocessed = []
+        for index, (source, controls) in enumerate(sources):
+            stem = f"{index:03d}_{source.stem}"
+            pp = output / (stem + ".i")
+            pp.unlink(missing_ok=True)
+            response = output / (stem + ".c51")
+            arguments = [f'"{source}"', *controls, "NOOBJECT", "NOPRINT", f'PREPRINT({pp})']
+            response.write_text("\n".join(arguments) + "\n", encoding="ascii")
+            result = subprocess.run([str(compiler), "@" + str(response)], cwd=project_file.parent, env=env)
+            # Missing includes are only warnings in C51; accepting them could omit commands.
+            if result.returncode != 0 or not pp.is_file():
+                raise RuntimeError(f"Command scan failed ({result.returncode}); see {response}")
+            preprocessed.append(pp)
+        content = "#define ESH_COMMAND_TABLE_READY 1\n" + command_table(preprocessed)
+        if not table.is_file() or table.read_text(encoding="ascii") != content:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="ascii", dir=table.parent, delete=False) as temp:
+                temporary = Path(temp.name)
+                temp.write(content)
+            try:
+                temporary.replace(table)
+            finally:
+                temporary.unlink(missing_ok=True)
+        print(f"Generated uVision commands for {target_name or target_output} from {len(sources)} C sources: {table}")
+    except Exception:
+        table.unlink(missing_ok=True)
+        raise
+
+
 def revision(directory):
     if not shutil.which("git"):
         return "unknown"
@@ -52,6 +184,10 @@ def revision(directory):
 def main():
     parser = argparse.ArgumentParser(description="Build a full-featured esh image with Keil C51/BL51")
     parser.add_argument("--keil-root", type=Path, default=os.environ.get("KEIL_C51_ROOT"))
+    parser.add_argument("--uvision-project", type=Path, help="Generate native command tables from a uVision project")
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument("--target", help="uVision target name for standalone command generation")
+    selection.add_argument("--uvision-output", type=Path, help="Select the active uVision target using its #L output path")
     parser.add_argument("--project-dir", type=Path, default=Path.cwd())
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--name", default="esh")
@@ -63,6 +199,11 @@ def main():
     parser.add_argument("--startup", type=Path, default=Path(__file__).with_name("startup.a51"))
     parser.add_argument("--compile-only", action="store_true", help="Compile all sources and tables, but do not claim a linked image")
     args = parser.parse_args()
+    if args.uvision_project:
+        generate_uvision_commands(args.uvision_project, args.target, args.keil_root, args.uvision_output)
+        return
+    if args.target or args.uvision_output:
+        parser.error("--target/--uvision-output requires --uvision-project")
     if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*", args.name):
         parser.error("--name must be a simple output filename without directories")
     if not re.fullmatch(r"[0-9A-Fa-f]+[Hh]-[0-9A-Fa-f]+[Hh]", args.xdata_range):
@@ -115,8 +256,11 @@ def main():
         key, separator, value = definition.partition("=")
         definitions[key] = value if separator else None
     definitions = [key + ("=" + value if value is not None else "") for key, value in definitions.items()]
-    controls = ["LARGE", "DEBUG", "OBJECTEXTEND", "OPTIMIZE(8,SPEED)", "INTPROMOTE", include_control,
-                "DEFINE(" + ",".join(definitions) + ")"]
+    # C51 has no per-warning-number switch; WARNINGLEVEL(1) drops the level-2
+    # C280 (unreferenced command-callback parameters) while still reporting
+    # missing includes (C318), macro redefinition (C317) and other diagnostics.
+    controls = ["LARGE", "DEBUG", "OBJECTEXTEND", "OPTIMIZE(8,SPEED)", "INTPROMOTE", "WARNINGLEVEL(1)",
+                include_control, "DEFINE(" + ",".join(definitions) + ")"]
     env = os.environ.copy()
     env["C51INC"] = str(keil / "INC")
     env["C51LIB"] = str(keil / "LIB")
@@ -165,6 +309,6 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except (OSError, ValueError, RuntimeError) as error:
+    except (OSError, ValueError, RuntimeError, ET.ParseError) as error:
         print(error, file=sys.stderr)
         sys.exit(2)
